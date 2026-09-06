@@ -1,0 +1,21 @@
+# Simulation and synthesis artifacts. Everything a tool regenerates.
+tb/xsim.dir/
+tb/*.log
+tb/*.jou
+tb/*.pb
+tb/*.wdb
+tb/*.vcd
+tb/*.str
+tb/xsim.covdb/
+tb/.Xil/
+
+syn/*.log
+syn/*.jou
+syn/*.rpt
+syn/.Xil/
+syn/vivado*.str
+
+# Not ignored, and deliberately so: src/generated/ and sw/ and doc/ are checked
+# in. They are generated, but a consumer of this IP must be able to build it
+# without installing corsair, and the C header is what software is written
+# against. Regenerate them with regs/gen_regs.py plus corsair; do not edit.

@@ -1,0 +1,994 @@
+{
+    "regmap": [
+        {
+            "name": "ID",
+            "description": "Identification and version. Read-only constants, so a correct read here proves the AXI4-Lite path reaches this block before any other register is trusted.",
+            "address": 0,
+            "bitfields": [
+                {
+                    "name": "MAGIC",
+                    "description": "Always 0x4D58 (ASCII 'MX'). A read of 0x0000 or 0xFFFF means the bus is not reaching the mixer.",
+                    "reset": 19800,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "ro",
+                    "hardware": "f",
+                    "enums": []
+                },
+                {
+                    "name": "VER_MAJOR",
+                    "description": "Major version. Increment on any incompatible map change.",
+                    "reset": 1,
+                    "width": 8,
+                    "lsb": 8,
+                    "access": "ro",
+                    "hardware": "f",
+                    "enums": []
+                },
+                {
+                    "name": "VER_MINOR",
+                    "description": "Minor version. Increment on backwards-compatible additions.",
+                    "reset": 0,
+                    "width": 8,
+                    "lsb": 0,
+                    "access": "ro",
+                    "hardware": "f",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "CAPS",
+            "description": "Build-time capabilities, so software can size its own layer loops from the hardware it is actually talking to instead of from a compile-time assumption. These are constants baked into the map by gen_regs.py; axis_video_mixer.sv asserts at elaboration that they match the RTL parameters, so a map and a build that disagree fail loudly rather than misreporting.",
+            "address": 4,
+            "bitfields": [
+                {
+                    "name": "NUM_LAYERS",
+                    "description": "Number of layer input streams this build instantiates.",
+                    "reset": 4,
+                    "width": 8,
+                    "lsb": 0,
+                    "access": "ro",
+                    "hardware": "f",
+                    "enums": []
+                },
+                {
+                    "name": "FIFO_DEPTH_LOG2",
+                    "description": "Per-layer input FIFO depth, as a power of two. A layer wider than 2**this cannot be guaranteed free of underflow.",
+                    "reset": 11,
+                    "width": 8,
+                    "lsb": 8,
+                    "access": "ro",
+                    "hardware": "f",
+                    "enums": []
+                },
+                {
+                    "name": "OUT_HAS_ALPHA",
+                    "description": "1 if the output stream carries RGBA8 (32-bit TDATA), 0 if it carries RGB8 (24-bit TDATA) with alpha discarded after blending.",
+                    "reset": 1,
+                    "width": 1,
+                    "lsb": 16,
+                    "access": "ro",
+                    "hardware": "f",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "SCRATCH",
+            "description": "Read/write scratchpad with no hardware effect. Exists so a write-then-read test can prove the bus end to end without disturbing the picture.",
+            "address": 8,
+            "bitfields": [
+                {
+                    "name": "VALUE",
+                    "description": "Any value. Reads back exactly what was written.",
+                    "reset": 0,
+                    "width": 32,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "n",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "CTRL",
+            "description": "Global mixer control.",
+            "address": 12,
+            "bitfields": [
+                {
+                    "name": "EN",
+                    "description": "Enable the output stream. While 0 the mixer holds TVALID low and accepts and discards nothing -- layer inputs are backpressured. Set the canvas and layer geometry first, then set this.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "SOFT_RST",
+                    "description": "Write 1 to resynchronise the whole datapath: flush every layer FIFO, drop to the top of a new output frame, and re-arm each layer at its next input SOF. Self-clearing; does not touch configuration registers.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 8,
+                    "access": "wosc",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "CANVAS",
+            "description": "Output raster size in pixels. The mixer emits HEIGHT lines of WIDTH pixels per frame. Changing either takes effect at the next output frame boundary.",
+            "address": 16,
+            "bitfields": [
+                {
+                    "name": "WIDTH",
+                    "description": "Output active width in pixels. Must be non-zero.",
+                    "reset": 1280,
+                    "width": 16,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "HEIGHT",
+                    "description": "Output active height in lines. Must be non-zero.",
+                    "reset": 720,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "BACKGROUND",
+            "description": "Colour of the canvas underneath every layer. This is what shows through wherever no enabled layer covers a pixel, which is why no layer is obliged to span the whole canvas -- every input can be an arbitrary rectangle.",
+            "address": 20,
+            "bitfields": [
+                {
+                    "name": "RGB",
+                    "description": "Background colour, {R[23:16], G[15:8], B[7:0]}.",
+                    "reset": 0,
+                    "width": 24,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "STATUS",
+            "description": "Live state. Read-only and never latched -- these reflect the current cycle, unlike the ERR register which latches.",
+            "address": 24,
+            "bitfields": [
+                {
+                    "name": "ERR_ANY",
+                    "description": "1 while any bit in ERR is set. Lets a polling loop check one register instead of two.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "FRAME_ACTIVE",
+                    "description": "1 while the output is mid-frame (between SOF and the last pixel of the last line).",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 1,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "LAYER_ARMED",
+                    "description": "One bit per layer: 1 once that layer has seen its input SOF and is delivering pixels. A layer that stays 0 is not receiving a stream.",
+                    "reset": 0,
+                    "width": 4,
+                    "lsb": 16,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "FRAME_COUNT",
+            "description": "Output frames completed since reset. Incrementing proves the pipeline is running; a stuck value with EN set means the output is stalled or a layer is starving.",
+            "address": 28,
+            "bitfields": [
+                {
+                    "name": "COUNT",
+                    "description": "Free-running, wraps at 2**32.",
+                    "reset": 0,
+                    "width": 32,
+                    "lsb": 0,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "ERR",
+            "description": "Latched error flags. Hardware sets, software clears by writing 1 to the bit. Latched rather than live because every one of these is a transient that would otherwise be missed between two polls.",
+            "address": 32,
+            "bitfields": [
+                {
+                    "name": "CFG",
+                    "description": "Configuration rejected: canvas width or height is zero, or an enabled layer's window is zero-sized or extends past the canvas edge. The offending layer is flagged in ERR_LAYER; a canvas fault sets this bit alone. The mixer keeps running on the last valid configuration.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                },
+                {
+                    "name": "STARVE",
+                    "description": "A layer's input FIFO ran empty at a pixel where that layer was due to contribute. The layer is dropped for the remainder of the frame and re-arms at its next input SOF; the output never stalls.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 1,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                },
+                {
+                    "name": "GEOM",
+                    "description": "A layer's stream geometry disagreed with its SIZE register -- TLAST arrived somewhere other than the configured last pixel of a line, or TUSER somewhere other than the first pixel of a frame. That layer resynchronises at its next input SOF.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 2,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                },
+                {
+                    "name": "SRC_STALL",
+                    "description": "A layer input was held backpressured -- TVALID high, TREADY low because its FIFO was full -- for longer than STALL_LIMIT cycles. The mirror image of OUT_STALL: that source is producing faster than the mixer consumes, which in practice means a frame rate mismatch. Harmless in short bursts, which is why it is measured against a threshold rather than flagged on the first stalled cycle.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 3,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                },
+                {
+                    "name": "OUT_STALL",
+                    "description": "The downstream sink held TREADY low for longer than the stall threshold while the mixer had a beat to give. Distinguishes 'the display pipeline is blocked' from 'a source is starving', which look identical from a stuck FRAME_COUNT alone.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 4,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "ERR_LAYER",
+            "description": "One latched bit per layer, set alongside the per-layer causes in ERR. Names which input is at fault without having to read every layer's status register. Write 1 to a bit to clear that layer alone.",
+            "address": 36,
+            "bitfields": [
+                {
+                    "name": "L0",
+                    "description": "Layer 0 has latched a starve, geometry or overflow fault.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                },
+                {
+                    "name": "L1",
+                    "description": "Layer 1 has latched a starve, geometry or overflow fault.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 1,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                },
+                {
+                    "name": "L2",
+                    "description": "Layer 2 has latched a starve, geometry or overflow fault.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 2,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                },
+                {
+                    "name": "L3",
+                    "description": "Layer 3 has latched a starve, geometry or overflow fault.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 3,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "IRQ_EN",
+            "description": "Interrupt enable, one bit per ERR bit and in the same order. The irq output is the OR of (ERR & IRQ_EN), so it stays asserted until software clears the ERR bit.",
+            "address": 40,
+            "bitfields": [
+                {
+                    "name": "CFG",
+                    "description": "Enable interrupt on ERR.CFG.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "STARVE",
+                    "description": "Enable interrupt on ERR.STARVE.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 1,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "GEOM",
+                    "description": "Enable interrupt on ERR.GEOM.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 2,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "SRC_STALL",
+                    "description": "Enable interrupt on ERR.SRC_STALL.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 3,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "OUT_STALL",
+                    "description": "Enable interrupt on ERR.OUT_STALL.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 4,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "STALL_LIMIT",
+            "description": "How long a stream may stay stalled before ERR.OUT_STALL or ERR.SRC_STALL latches, in clock cycles. Applies to both directions: the downstream sink holding TREADY low, and a layer source held backpressured on a full FIFO. Reset is 0x10000 -- comfortably longer than any legitimate gap, comfortably shorter than a frame.",
+            "address": 44,
+            "bitfields": [
+                {
+                    "name": "CYCLES",
+                    "description": "0 disables the check.",
+                    "reset": 65536,
+                    "width": 32,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L0_CTRL",
+            "description": "Layer 0 enable and alpha. Takes effect at the next output frame boundary.",
+            "address": 64,
+            "bitfields": [
+                {
+                    "name": "EN",
+                    "description": "Enable this layer. Layer 0. Layers composite bottom-up in port order, so layer 0 is nearest the background and the highest-numbered enabled layer is on top.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "ALPHA",
+                    "description": "Global alpha, 0 transparent to 255 opaque. Multiplied into each pixel's own alpha unless ALPHA_SRC selects otherwise.",
+                    "reset": 255,
+                    "width": 8,
+                    "lsb": 8,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "ALPHA_SRC",
+                    "description": "Where this layer's alpha comes from.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": [
+                        {
+                            "name": "PIXEL_X_GLOBAL",
+                            "description": "Per-pixel alpha from TDATA multiplied by ALPHA. The usual choice.",
+                            "value": 0
+                        },
+                        {
+                            "name": "GLOBAL_ONLY",
+                            "description": "Ignore the pixel's alpha channel and use ALPHA alone. Use for a source that leaves its alpha byte undefined.",
+                            "value": 1
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "L0_POS",
+            "description": "Layer 0 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears.",
+            "address": 68,
+            "bitfields": [
+                {
+                    "name": "X",
+                    "description": "Left edge, 0 is the leftmost canvas pixel.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "Y",
+                    "description": "Top edge, 0 is the topmost canvas line.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L0_SIZE",
+            "description": "Layer 0 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped.",
+            "address": 72,
+            "bitfields": [
+                {
+                    "name": "WIDTH",
+                    "description": "Width in pixels. Must be non-zero and X+WIDTH must not exceed the canvas width.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "HEIGHT",
+                    "description": "Height in lines. Must be non-zero and Y+HEIGHT must not exceed the canvas height.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L0_STATUS",
+            "description": "Layer 0 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER.",
+            "address": 76,
+            "bitfields": [
+                {
+                    "name": "ARMED",
+                    "description": "1 once the layer has seen its input SOF and is streaming.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "DROPPED",
+                    "description": "1 while the layer is being skipped for the rest of the current frame, after a starve or geometry fault.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 1,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "CFG_BAD",
+                    "description": "1 while this layer's window is rejected as out of bounds or zero-sized. The layer contributes nothing while this is set.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 2,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "FIFO_LEVEL",
+                    "description": "Current occupancy of this layer's input FIFO, in pixels. A level pinned at 0 means the source is too slow; pinned at full means the source is ahead and being backpressured, which is healthy.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L1_CTRL",
+            "description": "Layer 1 enable and alpha. Takes effect at the next output frame boundary.",
+            "address": 80,
+            "bitfields": [
+                {
+                    "name": "EN",
+                    "description": "Enable this layer. Layer 1. Layers composite bottom-up in port order, so layer 0 is nearest the background and the highest-numbered enabled layer is on top.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "ALPHA",
+                    "description": "Global alpha, 0 transparent to 255 opaque. Multiplied into each pixel's own alpha unless ALPHA_SRC selects otherwise.",
+                    "reset": 255,
+                    "width": 8,
+                    "lsb": 8,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "ALPHA_SRC",
+                    "description": "Where this layer's alpha comes from.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": [
+                        {
+                            "name": "PIXEL_X_GLOBAL",
+                            "description": "Per-pixel alpha from TDATA multiplied by ALPHA. The usual choice.",
+                            "value": 0
+                        },
+                        {
+                            "name": "GLOBAL_ONLY",
+                            "description": "Ignore the pixel's alpha channel and use ALPHA alone. Use for a source that leaves its alpha byte undefined.",
+                            "value": 1
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "L1_POS",
+            "description": "Layer 1 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears.",
+            "address": 84,
+            "bitfields": [
+                {
+                    "name": "X",
+                    "description": "Left edge, 0 is the leftmost canvas pixel.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "Y",
+                    "description": "Top edge, 0 is the topmost canvas line.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L1_SIZE",
+            "description": "Layer 1 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped.",
+            "address": 88,
+            "bitfields": [
+                {
+                    "name": "WIDTH",
+                    "description": "Width in pixels. Must be non-zero and X+WIDTH must not exceed the canvas width.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "HEIGHT",
+                    "description": "Height in lines. Must be non-zero and Y+HEIGHT must not exceed the canvas height.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L1_STATUS",
+            "description": "Layer 1 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER.",
+            "address": 92,
+            "bitfields": [
+                {
+                    "name": "ARMED",
+                    "description": "1 once the layer has seen its input SOF and is streaming.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "DROPPED",
+                    "description": "1 while the layer is being skipped for the rest of the current frame, after a starve or geometry fault.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 1,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "CFG_BAD",
+                    "description": "1 while this layer's window is rejected as out of bounds or zero-sized. The layer contributes nothing while this is set.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 2,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "FIFO_LEVEL",
+                    "description": "Current occupancy of this layer's input FIFO, in pixels. A level pinned at 0 means the source is too slow; pinned at full means the source is ahead and being backpressured, which is healthy.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L2_CTRL",
+            "description": "Layer 2 enable and alpha. Takes effect at the next output frame boundary.",
+            "address": 96,
+            "bitfields": [
+                {
+                    "name": "EN",
+                    "description": "Enable this layer. Layer 2. Layers composite bottom-up in port order, so layer 0 is nearest the background and the highest-numbered enabled layer is on top.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "ALPHA",
+                    "description": "Global alpha, 0 transparent to 255 opaque. Multiplied into each pixel's own alpha unless ALPHA_SRC selects otherwise.",
+                    "reset": 255,
+                    "width": 8,
+                    "lsb": 8,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "ALPHA_SRC",
+                    "description": "Where this layer's alpha comes from.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": [
+                        {
+                            "name": "PIXEL_X_GLOBAL",
+                            "description": "Per-pixel alpha from TDATA multiplied by ALPHA. The usual choice.",
+                            "value": 0
+                        },
+                        {
+                            "name": "GLOBAL_ONLY",
+                            "description": "Ignore the pixel's alpha channel and use ALPHA alone. Use for a source that leaves its alpha byte undefined.",
+                            "value": 1
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "L2_POS",
+            "description": "Layer 2 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears.",
+            "address": 100,
+            "bitfields": [
+                {
+                    "name": "X",
+                    "description": "Left edge, 0 is the leftmost canvas pixel.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "Y",
+                    "description": "Top edge, 0 is the topmost canvas line.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L2_SIZE",
+            "description": "Layer 2 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped.",
+            "address": 104,
+            "bitfields": [
+                {
+                    "name": "WIDTH",
+                    "description": "Width in pixels. Must be non-zero and X+WIDTH must not exceed the canvas width.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "HEIGHT",
+                    "description": "Height in lines. Must be non-zero and Y+HEIGHT must not exceed the canvas height.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L2_STATUS",
+            "description": "Layer 2 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER.",
+            "address": 108,
+            "bitfields": [
+                {
+                    "name": "ARMED",
+                    "description": "1 once the layer has seen its input SOF and is streaming.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "DROPPED",
+                    "description": "1 while the layer is being skipped for the rest of the current frame, after a starve or geometry fault.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 1,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "CFG_BAD",
+                    "description": "1 while this layer's window is rejected as out of bounds or zero-sized. The layer contributes nothing while this is set.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 2,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "FIFO_LEVEL",
+                    "description": "Current occupancy of this layer's input FIFO, in pixels. A level pinned at 0 means the source is too slow; pinned at full means the source is ahead and being backpressured, which is healthy.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L3_CTRL",
+            "description": "Layer 3 enable and alpha. Takes effect at the next output frame boundary.",
+            "address": 112,
+            "bitfields": [
+                {
+                    "name": "EN",
+                    "description": "Enable this layer. Layer 3. Layers composite bottom-up in port order, so layer 0 is nearest the background and the highest-numbered enabled layer is on top.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "ALPHA",
+                    "description": "Global alpha, 0 transparent to 255 opaque. Multiplied into each pixel's own alpha unless ALPHA_SRC selects otherwise.",
+                    "reset": 255,
+                    "width": 8,
+                    "lsb": 8,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "ALPHA_SRC",
+                    "description": "Where this layer's alpha comes from.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": [
+                        {
+                            "name": "PIXEL_X_GLOBAL",
+                            "description": "Per-pixel alpha from TDATA multiplied by ALPHA. The usual choice.",
+                            "value": 0
+                        },
+                        {
+                            "name": "GLOBAL_ONLY",
+                            "description": "Ignore the pixel's alpha channel and use ALPHA alone. Use for a source that leaves its alpha byte undefined.",
+                            "value": 1
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "L3_POS",
+            "description": "Layer 3 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears.",
+            "address": 116,
+            "bitfields": [
+                {
+                    "name": "X",
+                    "description": "Left edge, 0 is the leftmost canvas pixel.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "Y",
+                    "description": "Top edge, 0 is the topmost canvas line.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L3_SIZE",
+            "description": "Layer 3 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped.",
+            "address": 120,
+            "bitfields": [
+                {
+                    "name": "WIDTH",
+                    "description": "Width in pixels. Must be non-zero and X+WIDTH must not exceed the canvas width.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
+                    "name": "HEIGHT",
+                    "description": "Height in lines. Must be non-zero and Y+HEIGHT must not exceed the canvas height.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "L3_STATUS",
+            "description": "Layer 3 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER.",
+            "address": 124,
+            "bitfields": [
+                {
+                    "name": "ARMED",
+                    "description": "1 once the layer has seen its input SOF and is streaming.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 0,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "DROPPED",
+                    "description": "1 while the layer is being skipped for the rest of the current frame, after a starve or geometry fault.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 1,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "CFG_BAD",
+                    "description": "1 while this layer's window is rejected as out of bounds or zero-sized. The layer contributes nothing while this is set.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 2,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
+                    "name": "FIFO_LEVEL",
+                    "description": "Current occupancy of this layer's input FIFO, in pixels. A level pinned at 0 means the source is too slow; pinned at full means the source is ahead and being backpressured, which is healthy.",
+                    "reset": 0,
+                    "width": 16,
+                    "lsb": 16,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                }
+            ]
+        }
+    ]
+}
