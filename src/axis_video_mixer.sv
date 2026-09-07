@@ -115,22 +115,22 @@ module axis_video_mixer
   logic [P_NUM_LAYERS-1:0] err_layer_set;
 
   logic [P_NUM_LAYERS-1:0] lay_en;
-  logic [             7:0] lay_alpha    [P_NUM_LAYERS];
+  logic [             7:0] lay_alpha       [P_NUM_LAYERS];
   logic [P_NUM_LAYERS-1:0] lay_alpha_src;
-  logic [            15:0] lay_x        [P_NUM_LAYERS];
-  logic [            15:0] lay_y        [P_NUM_LAYERS];
-  logic [            15:0] lay_w        [P_NUM_LAYERS];
-  logic [            15:0] lay_h        [P_NUM_LAYERS];
+  logic [            15:0] lay_x           [P_NUM_LAYERS];
+  logic [            15:0] lay_y           [P_NUM_LAYERS];
+  logic [            15:0] lay_w           [P_NUM_LAYERS];
+  logic [            15:0] lay_h           [P_NUM_LAYERS];
 
   logic [P_NUM_LAYERS-1:0] lay_armed;
   logic [P_NUM_LAYERS-1:0] lay_dropped;
   logic [P_NUM_LAYERS-1:0] lay_cfg_bad;
-  logic [            15:0] lay_level    [P_NUM_LAYERS];
+  logic [            15:0] lay_level       [P_NUM_LAYERS];
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Unflatten the input streams
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  logic [PX_W-1:0] s_axis_tdata_arr[P_NUM_LAYERS];
+  logic [        PX_W-1:0] s_axis_tdata_arr[P_NUM_LAYERS];
 
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_unflatten
     assign s_axis_tdata_arr[gi] = s_axis_tdata[gi*PX_W+:PX_W];

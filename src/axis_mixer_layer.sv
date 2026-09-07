@@ -59,11 +59,11 @@ module axis_mixer_layer
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Layer input stream, RGBA8
     ////////////////////////////////////////////////////////////////////////////////////////////////
-    input  logic          s_axis_tvalid,
-    output logic          s_axis_tready,
+    input  logic            s_axis_tvalid,
+    output logic            s_axis_tready,
     input  logic [PX_W-1:0] s_axis_tdata,
-    input  logic          s_axis_tuser,   // SOF
-    input  logic          s_axis_tlast,   // EOL
+    input  logic            s_axis_tuser,   // SOF
+    input  logic            s_axis_tlast,   // EOL
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Pixel output to the blend cascade
@@ -75,9 +75,9 @@ module axis_mixer_layer
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Status
     ////////////////////////////////////////////////////////////////////////////////////////////////
-    output logic        armed,       // has seen SOF and is delivering pixels
-    output logic        geom_err,    // one-cycle pulse: stream disagreed with SIZE
-    output logic        src_stall,   // one-cycle pulse: backpressured too long
+    output logic        armed,      // has seen SOF and is delivering pixels
+    output logic        geom_err,   // one-cycle pulse: stream disagreed with SIZE
+    output logic        src_stall,  // one-cycle pulse: backpressured too long
     output logic [15:0] level
 );
   ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -115,7 +115,7 @@ module axis_mixer_layer
   //
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   assign s_axis_tready = enable ? !fifo_full : 1'b1;
-  assign beat          = s_axis_tvalid && s_axis_tready;
+  assign beat = s_axis_tvalid && s_axis_tready;
 
   // In WAIT_SOF everything before the SOF landmark is consumed and discarded;
   // the SOF beat itself is the first pixel of the frame and is kept. A disabled
@@ -129,7 +129,7 @@ module axis_mixer_layer
   assign cur_px = (state == S_STREAM) ? px_cnt : 16'd0;
   assign cur_ln = (state == S_STREAM) ? ln_cnt : 16'd0;
 
-  assign last_px_of_line  = (cur_px == cfg_width - 16'd1);
+  assign last_px_of_line = (cur_px == cfg_width - 16'd1);
   assign last_ln_of_frame = (cur_ln == cfg_height - 16'd1);
 
   // Two things must hold on every accepted beat: TLAST marks the configured last

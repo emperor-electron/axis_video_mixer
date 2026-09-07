@@ -1,0 +1,231 @@
+<mxfile host="app.diagrams.net" agent="hand-written" version="24.7.17" type="device"><diagram id="1_Block_diagram" name="1 Block diagram"><mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="t" value="axis_video_mixer - block diagram" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=16;fontStyle=1" vertex="1" parent="1"><mxGeometry x="40" y="20" width="700" height="30" as="geometry"/></mxCell><mxCell id="st" value="N layer streams in, one composited stream out. Everything is one clock domain." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="40" y="48" width="900" height="20" as="geometry"/></mxCell><mxCell id="g_lay" value="axis_mixer_layer  x N" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=left;verticalAlign=top;dashed=1;fillColor=none;strokeColor=#999999;" vertex="1" parent="1"><mxGeometry x="40" y="90" width="380" height="400" as="geometry"/></mxCell><mxCell id="in0" value="s_axis[0]
+RGBA8, TUSER=SOF, TLAST=EOL" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1"><mxGeometry x="55" y="120" width="150" height="50" as="geometry"/></mxCell><mxCell id="fsm0" value="SOF align FSM
+WAIT_SOF / STREAM
+counts vs W,H" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="225" y="110" width="90" height="70" as="geometry"/></mxCell><mxCell id="fifo0" value="FWFT FIFO
+2048 x 32
+BRAM" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="325" y="110" width="80" height="70" as="geometry"/></mxCell><mxCell id="e_a0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="in0" target="fsm0"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e_b0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="fsm0" target="fifo0"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="in1" value="s_axis[1]
+RGBA8, TUSER=SOF, TLAST=EOL" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1"><mxGeometry x="55" y="250" width="150" height="50" as="geometry"/></mxCell><mxCell id="fsm1" value="SOF align FSM
+WAIT_SOF / STREAM
+counts vs W,H" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="225" y="240" width="90" height="70" as="geometry"/></mxCell><mxCell id="fifo1" value="FWFT FIFO
+2048 x 32
+BRAM" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="325" y="240" width="80" height="70" as="geometry"/></mxCell><mxCell id="e_a1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="in1" target="fsm1"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e_b1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="fsm1" target="fifo1"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="in2" value="s_axis[N-1]
+RGBA8, TUSER=SOF, TLAST=EOL" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1"><mxGeometry x="55" y="380" width="150" height="50" as="geometry"/></mxCell><mxCell id="fsm2" value="SOF align FSM
+WAIT_SOF / STREAM
+counts vs W,H" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="225" y="370" width="90" height="70" as="geometry"/></mxCell><mxCell id="fifo2" value="FWFT FIFO
+2048 x 32
+BRAM" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="325" y="370" width="80" height="70" as="geometry"/></mxCell><mxCell id="e_a2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="in2" target="fsm2"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e_b2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="fsm2" target="fifo2"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="dots" value="..." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontSize=20;" vertex="1" parent="1"><mxGeometry x="230" y="340" width="30" height="30" as="geometry"/></mxCell><mxCell id="rast" value="Output raster
+out_x, out_y
+canvas W x H" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="470" y="120" width="130" height="70" as="geometry"/></mxCell><mxCell id="win" value="Window compare
+in_win[i] =
+out in layer rect" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="470" y="230" width="130" height="80" as="geometry"/></mxCell><mxCell id="pop" value="pop[i] =
+in_win &amp; active
+&amp; !dropped
+&amp; px_valid
+&amp; pipe_en" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="470" y="350" width="130" height="90" as="geometry"/></mxCell><mxCell id="stF" value="Stage F
+capture FIFO read
+(no arithmetic)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="660" y="150" width="120" height="70" as="geometry"/></mxCell><mxCell id="stA" value="Stage A
+effective_alpha
+= px_a * global_a" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="660" y="250" width="120" height="70" as="geometry"/></mxCell><mxCell id="casc" value="Blend cascade
+N stages, one
+layer each
+acc = over(px, acc)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="660" y="350" width="120" height="90" as="geometry"/></mxCell><mxCell id="out" value="m_axis
+RGB or RGBA8
+TUSER=SOF
+TLAST=EOL" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1"><mxGeometry x="850" y="250" width="130" height="80" as="geometry"/></mxCell><mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="rast" target="win"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="win" target="pop"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e3" value="px_data" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="fifo1" target="stF"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="stF" target="stA"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="stA" target="casc"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="casc" target="out"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e7" value="pop[i]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;" edge="1" parent="1" source="pop" target="fifo1"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="axil" value="AXI4-Lite slave
+(corsair block)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="470" y="620" width="130" height="60" as="geometry"/></mxCell><mxCell id="latch" value="Frame-boundary latch
+act_* &lt;= cfg_*
+when frame_latch" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="660" y="620" width="160" height="60" as="geometry"/></mxCell><mxCell id="err" value="Error aggregation
+CFG STARVE GEOM
+SRC_STALL OUT_STALL" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="870" y="620" width="160" height="60" as="geometry"/></mxCell><mxCell id="e8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="axil" target="latch"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e9" value="act_w/h/x/y/alpha/en" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;" edge="1" parent="1" source="latch" target="win"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="e10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;" edge="1" parent="1" source="err" target="axil"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="n1" value="Three handshake domains, deliberately decoupled:
+
+A  source -&gt; layer FIFO      tready = enable ? !full : 1
+B  FIFO -&gt; cascade           pop, gated by pipe_en
+C  cascade -&gt; sink           pipe_en = tready || !tvalid
+
+Backpressure from A NEVER reaches C. A layer with no pixel
+when its window opens is DROPPED, not waited for." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="1060" y="120" width="330" height="160" as="geometry"/></mxCell><mxCell id="n2" value="Latency, SOF in to SOF out:  2 + N cycles
+  stage F, stage A, then one stage per layer." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="1060" y="300" width="330" height="55" as="geometry"/></mxCell></root></mxGraphModel></diagram><diagram id="2_Backpressure" name="2 Backpressure"><mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="t" value="Backpressure semantics" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=16;fontStyle=1" vertex="1" parent="1"><mxGeometry x="40" y="20" width="700" height="30" as="geometry"/></mxCell><mxCell id="st" value="The one rule: input backpressure must never become output backpressure." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="40" y="48" width="900" height="20" as="geometry"/></mxCell><mxCell id="srcA" value="upstream
+source" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1"><mxGeometry x="60" y="140" width="110" height="60" as="geometry"/></mxCell><mxCell id="layA" value="axis_mixer_layer" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="240" y="140" width="150" height="60" as="geometry"/></mxCell><mxCell id="fifoA" value="FIFO" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="240" y="240" width="150" height="50" as="geometry"/></mxCell><mxCell id="ea1" value="tvalid / tdata" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="srcA" target="layA"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="ea2" value="tready" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;exitX=0;exitY=0.8;entryX=1;entryY=0.8;" edge="1" parent="1" source="layA" target="srcA"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="ea3" value="push" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="layA" target="fifoA"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="dA" value="DOMAIN A - source into the layer
+
+  assign tready = enable ? !fifo_full : 1'b1;
+
+tready depends on FIFO space and NOTHING else.
+Not on the raster, not on the sink.
+
+The enable term is load bearing: a DISABLED layer
+asserts tready permanently and discards. Backpressuring
+a disabled layer wedges its source forever, and the
+source has no way to know why." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="440" y="130" width="360" height="170" as="geometry"/></mxCell><mxCell id="fifoB" value="FIFO head
+px_valid, px_data" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="60" y="400" width="140" height="60" as="geometry"/></mxCell><mxCell id="popB" value="pop = in_win &amp; lay_active
+&amp; !dropped &amp; px_valid
+&amp; pipe_en &amp; s0_valid" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="240" y="395" width="200" height="70" as="geometry"/></mxCell><mxCell id="starveB" value="starve = in_win &amp; lay_active
+&amp; !dropped &amp; !px_valid
+&amp; pipe_en &amp; s0_valid" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="240" y="495" width="200" height="70" as="geometry"/></mxCell><mxCell id="eb1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="fifoB" target="popB"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="eb2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="fifoB" target="starveB"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="dB" value="DOMAIN B - FIFO into the cascade
+
+A pop happens only when the raster is inside the window
+AND the layer is active AND a pixel is there.
+
+If the raster wants a pixel and none is there, that is
+STARVE, and starve does not stall -- it drops the layer
+for the rest of the frame, flushes its FIFO and re-arms
+at the next input SOF.
+
+Why flush rather than skip one pixel: the FIFO contents
+are now positionally wrong by however many pixels were
+missed, and nothing in the stream says by how many.
+There is no mid-frame resync. SOF is the only landmark." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="500" y="390" width="400" height="200" as="geometry"/></mxCell><mxCell id="cascC" value="blend cascade
+last stage v_q[N]" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="60" y="700" width="150" height="60" as="geometry"/></mxCell><mxCell id="sinkC" value="downstream
+sink" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1"><mxGeometry x="320" y="700" width="110" height="60" as="geometry"/></mxCell><mxCell id="ec1" value="tvalid = v_q[N]  (registered)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="cascC" target="sinkC"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="ec2" value="tready" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;exitX=0;exitY=0.8;entryX=1;entryY=0.8;" edge="1" parent="1" source="sinkC" target="cascC"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="dC" value="DOMAIN C - the output, and the gate everything hangs off
+
+  assign pipe_en = m_axis_tready || !m_axis_tvalid;
+
+Read it as: the last stage may be overwritten if it is being
+consumed, or if it holds nothing worth keeping.
+
+Because every stage shifts under the SAME pipe_en, that one
+condition propagates backwards for free -- the pipeline is a
+single shift register. Either everything moves or nothing does.
+
+The || !tvalid term is not an optimisation. Without it a sink
+that holds tready low while the pipe is empty freezes the raster
+for no reason, and you lose the fill time you needed to have data
+ready the moment tready returns." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="500" y="660" width="430" height="210" as="geometry"/></mxCell><mxCell id="must" value="pipe_en MUST gate every piece of datapath state:
+
+  out_x / out_y      raster counters
+  lay_pop[i]         FIFO pops
+  stage F, stage A   capture and alpha
+  acc_q, v_q, sof_q, eol_q, eof_q   every cascade stage
+
+Miss the raster counter and the picture shears: the counter
+runs ahead of the pixels. Miss a FIFO pop and you drop a
+pixel and shift the layer by one for the rest of the frame." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;fontSize=10;" vertex="1" parent="1"><mxGeometry x="990" y="660" width="400" height="160" as="geometry"/></mxCell><mxCell id="loop" value="NO COMBINATIONAL PATH FROM TREADY TO TVALID
+
+tvalid is v_q[N], a flip-flop. pipe_en depends on tready, but
+pipe_en only drives register ENABLES -- never the value of
+tvalid. That is what keeps this legal AXI4-Stream and keeps
+two of these back to back from forming a combinational loop." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="990" y="400" width="400" height="120" as="geometry"/></mxCell></root></mxGraphModel></diagram><diagram id="3_Pipeline" name="3 Pipeline"><mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="t" value="Pipeline and the pipe_en rail" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=16;fontStyle=1" vertex="1" parent="1"><mxGeometry x="40" y="20" width="700" height="30" as="geometry"/></mxCell><mxCell id="st" value="One enable for the whole pipe. Latency 2 + N." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="40" y="48" width="900" height="20" as="geometry"/></mxCell><mxCell id="s0" value="raster
+out_x, out_y
+s0_valid/sof/eol/eof" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="80" y="160" width="160" height="90" as="geometry"/></mxCell><mxCell id="s1" value="F
+capture FIFO read
+pxf_q, alphaf_q, bgf_q" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="280" y="160" width="160" height="90" as="geometry"/></mxCell><mxCell id="ep1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="s0" target="s1"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="s2" value="A
+effective_alpha
+la_q[0][i]" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="480" y="160" width="160" height="90" as="geometry"/></mxCell><mxCell id="ep2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="s1" target="s2"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="s3" value="B0
+acc_q[1] =
+over(L0, bg)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="680" y="160" width="160" height="90" as="geometry"/></mxCell><mxCell id="ep3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="s2" target="s3"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="s4" value="B1
+acc_q[2] =
+over(L1, acc_q[1])" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="880" y="160" width="160" height="90" as="geometry"/></mxCell><mxCell id="ep4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="s3" target="s4"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="s5" value="BN
+acc_q[N] =
+over(L(N-1), ...)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="1080" y="160" width="160" height="90" as="geometry"/></mxCell><mxCell id="ep5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="s4" target="s5"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="outp" value="m_axis
+tvalid = v_q[N]" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;" vertex="1" parent="1"><mxGeometry x="1280" y="175" width="130" height="60" as="geometry"/></mxCell><mxCell id="ep6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="s5" target="outp"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="rail" value="pipe_en = m_axis_tready || !m_axis_tvalid" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#ffe6cc;strokeColor=#d79b00;fillColor=#ffcccc;" vertex="1" parent="1"><mxGeometry x="80" y="330" width="1160" height="40" as="geometry"/></mxCell><mxCell id="er0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;endArrow=open;exitX=0.5;exitY=0;html=1;" edge="1" parent="1" source="rail" target="s0"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="er1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;endArrow=open;exitX=0.5;exitY=0;html=1;" edge="1" parent="1" source="rail" target="s1"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="er2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;endArrow=open;exitX=0.5;exitY=0;html=1;" edge="1" parent="1" source="rail" target="s2"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="er3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;endArrow=open;exitX=0.5;exitY=0;html=1;" edge="1" parent="1" source="rail" target="s3"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="er4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;endArrow=open;exitX=0.5;exitY=0;html=1;" edge="1" parent="1" source="rail" target="s4"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="er5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;dashed=1;endArrow=open;exitX=0.5;exitY=0;html=1;" edge="1" parent="1" source="rail" target="s5"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="n3" value="Every box above is enabled by the same rail. That is the whole
+flow-control design, and its cost is that a stalled sink stalls
+the entire pipe rather than letting earlier stages keep filling.
+
+The alternative is an elastic pipeline: valid/ready and a skid
+buffer per stage. More area, more state, and worth it only when
+there are several independent stall sources. Here there is exactly
+one -- the sink -- so the monolithic rail is the right trade." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="80" y="410" width="520" height="130" as="geometry"/></mxCell><mxCell id="n4" value="WHY STAGE F EXISTS AND DOES NOTHING
+
+The layer pixel comes out of a block RAM. BRAM clock-to-out is
+most of a cycle at 148.5 MHz. Feeding it straight into the alpha
+multiply left 14 levels of logic in what remained and missed
+setup by 0.27 ns.
+
+Stage F captures the read and does no arithmetic, so stage A
+starts from a flip-flop. If you are hitting timing on the read
+path, this is the cheap fix -- one register stage, one cycle." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="640" y="410" width="470" height="150" as="geometry"/></mxCell><mxCell id="n5" value="WHY A CASCADE AND NOT A TREE
+
+Porter-Duff 'over' IS associative, so a log2(N) tree looks
+tempting. It does not work with an RGB-only accumulator:
+combining two layers before compositing them onto the
+background needs the pair's COMPOSITE alpha, which means
+carrying premultiplied RGBA through the tree.
+
+The cascade avoids that entirely, because the bottom of the
+stack is the opaque background. The accumulator is therefore
+opaque by construction at every stage, and 'over' onto an
+opaque destination needs only the top layer's alpha.
+
+Cost: depth N instead of log2(N). At N=4..16 and one multiply
+per stage that is latency, not frequency." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="1140" y="410" width="400" height="200" as="geometry"/></mxCell><mxCell id="n6" value="A layer that is not contributing arrives at its stage with
+alpha = 0, and over() with alpha 0 returns the accumulator
+bit-exactly. Absence needs no special case anywhere." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="80" y="570" width="520" height="60" as="geometry"/></mxCell></root></mxGraphModel></diagram><diagram id="4_Layer_FSM" name="4 Layer FSM"><mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="t" value="Layer input FSM - re-establishing alignment from evidence" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=16;fontStyle=1" vertex="1" parent="1"><mxGeometry x="40" y="20" width="800" height="30" as="geometry"/></mxCell><mxCell id="st" value="Nothing links a layer's stream to the output raster except a count. SOF is the only landmark." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="40" y="48" width="1000" height="20" as="geometry"/></mxCell><mxCell id="wait" value="WAIT_SOF
+armed = 0
+discard input" style="ellipse;whiteSpace=wrap;html=1;fontSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="200" y="200" width="170" height="90" as="geometry"/></mxCell><mxCell id="strm" value="STREAM
+push to FIFO
+count px, ln" style="ellipse;whiteSpace=wrap;html=1;fontSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="620" y="200" width="170" height="90" as="geometry"/></mxCell><mxCell id="f1" value="beat &amp;&amp; TUSER
+(SOF beat is pixel 0, kept)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;" edge="1" parent="1" source="wait" target="strm"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="f2" value="clean end of frame
+(last px of last line)
+NO flush" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;exitX=0.5;exitY=1;entryX=0.5;entryY=1;curved=1;" edge="1" parent="1" source="strm" target="wait"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="f3" value="geom_bad -&gt; flush + geom_err" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;jettySize=auto;orthogonalLoop=1;fontSize=10;exitX=0.5;exitY=0;entryX=0.5;entryY=0;curved=1;strokeColor=#b85450;" edge="1" parent="1" source="strm" target="wait"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell><mxCell id="gb" value="geom_bad = accept &amp;&amp; (
+     TLAST != (px_cnt == W-1)
+  || TUSER != (state != STREAM) )
+
+Either means the source and the SIZE register disagree
+about the shape of a frame. Every pixel after that point
+lands in the wrong place and stays wrong, so the layer is
+flushed and re-armed rather than allowed to continue." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;fontSize=10;" vertex="1" parent="1"><mxGeometry x="880" y="170" width="420" height="140" as="geometry"/></mxCell><mxCell id="n7" value="WHY A CLEAN END OF FRAME DOES NOT FLUSH
+
+The FIFO still holds pixels the output has not consumed. The
+next frame queues up behind them, and that prefill is exactly
+what keeps a layer positioned at x = 0 from starving on the
+first line of the next frame.
+
+armed therefore stays high across the boundary. Only a flush
+-- soft reset, starve, geometry change, or disable -- disarms." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="200" y="380" width="480" height="140" as="geometry"/></mxCell><mxCell id="n8" value="ARMED IS NOT ACTIVE, AND THE DIFFERENCE IS A REAL BUG
+
+armed  : this layer has seen a SOF and is delivering pixels.
+active : this layer is taking part in the current output frame.
+
+active is set ONLY at an output frame boundary:
+
+    if (frame_latch)
+        lay_active[i] &lt;= lay_armed[i] &amp;&amp; want_en[i] &amp;&amp; !lay_flush[i];
+
+The mixer consumes a layer POSITIONALLY -- one pop per output
+pixel inside the window -- so wherever the first pop happens is
+where the layer's top-left corner lands.
+
+A layer that armed mid-frame would have its pixel 0 popped part
+way along a line. And because it then supplies exactly as many
+pixels per frame as the window consumes, that offset NEVER works
+itself out. The layer sits skewed by a fixed amount forever.
+
+Holding off until the boundary guarantees the FIFO head is pixel
+zero when the window first opens, because nothing pops an
+inactive layer." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;fontSize=10;" vertex="1" parent="1"><mxGeometry x="740" y="380" width="560" height="290" as="geometry"/></mxCell></root></mxGraphModel></diagram><diagram id="5_FIFO_sizing" name="5 FIFO sizing"><mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="t" value="FIFO depth, and why one full layer line" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=16;fontStyle=1" vertex="1" parent="1"><mxGeometry x="40" y="20" width="700" height="30" as="geometry"/></mxCell><mxCell id="st" value="The output consumes a layer w pixels out of every W, on h lines out of H. The FIFO absorbs the difference." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="40" y="48" width="1100" height="20" as="geometry"/></mxCell><mxCell id="canvas" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1"><mxGeometry x="80" y="120" width="500" height="290" as="geometry"/></mxCell><mxCell id="clab" value="canvas W x H" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="90" y="125" width="150" height="20" as="geometry"/></mxCell><mxCell id="winA" value="layer A
+x = 0" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="80" y="190" width="190" height="90" as="geometry"/></mxCell><mxCell id="winB" value="layer B
+x &gt; 0" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="350" y="260" width="170" height="90" as="geometry"/></mxCell><mxCell id="n9" value="WORST CASE IS A WINDOW AT x = 0
+
+Layer B has the whole span from the start of the output line
+until x reaches its left edge to push pixels. Layer A has none:
+the instant the line begins, the mixer starts popping, so every
+pixel that line needs must ALREADY be buffered.
+
+Hence depth &gt;= layer width. One full line is the safe sizing,
+and 2048 covers any width up to 1920.
+
+Over a whole frame the rates balance exactly -- the layer
+supplies w*h and the mixer consumes w*h -- so the FIFO is
+absorbing INTRA-frame burstiness, not a rate mismatch. If the
+rates genuinely differ you get starve, and no depth fixes it." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="640" y="120" width="470" height="210" as="geometry"/></mxCell><mxCell id="occ" value="FIFO occupancy over one output line, layer at x = 0" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="80" y="450" width="500" height="20" as="geometry"/></mxCell><mxCell id="ax" value="" style="shape=line;direction=north;strokeColor=#666666;html=1;" vertex="1" parent="1"><mxGeometry x="110" y="480" width="10" height="180" as="geometry"/></mxCell><mxCell id="ax2" value="" style="shape=line;strokeColor=#666666;html=1;" vertex="1" parent="1"><mxGeometry x="110" y="655" width="900" height="10" as="geometry"/></mxCell><mxCell id="plot" value="drains at 1 px/cycle while the raster is inside the window
+refills during the rest of the line and during blanking" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;align=center;" vertex="1" parent="1"><mxGeometry x="200" y="500" width="600" height="40" as="geometry"/></mxCell><mxCell id="wave" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=none;strokeColor=#82b366;strokeWidth=2;" vertex="1" parent="1"><mxGeometry x="130" y="545" width="320" height="100" as="geometry"/></mxCell><mxCell id="wave2" value="" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;align=center;verticalAlign=middle;fillColor=none;strokeColor=#82b366;strokeWidth=2;dashed=1;" vertex="1" parent="1"><mxGeometry x="450" y="545" width="480" height="100" as="geometry"/></mxCell><mxCell id="wl1" value="pop w pixels
+back to back" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;align=center;" vertex="1" parent="1"><mxGeometry x="180" y="580" width="220" height="40" as="geometry"/></mxCell><mxCell id="wl2" value="no pops -- source refills" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;align=center;" vertex="1" parent="1"><mxGeometry x="560" y="580" width="260" height="20" as="geometry"/></mxCell><mxCell id="wl3" value="depth" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="60" y="550" width="50" height="20" as="geometry"/></mxCell><mxCell id="wl4" value="time within one output line" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="450" y="665" width="250" height="20" as="geometry"/></mxCell><mxCell id="n10" value="FIRST-WORD FALL-THROUGH IS NOT OPTIONAL HERE
+
+The consumer decides whether to pop based on whether data is
+there (px_valid). It cannot afford a read-latency cycle inside
+the blend pipeline, and it cannot speculatively pop.
+
+At 2048 x 32 x N the storage has to be block RAM, which has
+registered output. So: BRAM plus a prefetch register.
+
+  mem_rd_en = (rd_ptr != wr_ptr) &amp;&amp; (!rd_valid || rd_en);
+
+That single condition covers all four combinations of rd_valid
+and rd_en with no state machine: fetch whenever memory holds
+something and the prefetch slot is empty or being emptied." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="1140" y="120" width="430" height="200" as="geometry"/></mxCell><mxCell id="n11" value="Pointers carry one bit more than the address so full and empty
+are distinguishable without sacrificing an entry:
+
+  mem_count = wr_ptr - rd_ptr;
+  full      = (mem_count == P_DEPTH);
+
+level reports mem_count + rd_valid, so a FIFO holding exactly
+one prefetched pixel does not report empty." style="rounded=0;whiteSpace=wrap;html=1;fontSize=10;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="1140" y="350" width="430" height="130" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>

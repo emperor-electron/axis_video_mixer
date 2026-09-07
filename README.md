@@ -124,6 +124,17 @@ cd regs && ./gen_regs.py -n 8 && corsair -r regs.json -c csrconfig
 Then build with `P_NUM_LAYERS = 8`. A parameter that disagrees with the
 generated map stops elaboration rather than quietly leaving layers unwired.
 
+## Design document
+
+[`doc/design.md`](doc/design.md) — requirements, every decision and why, the
+traps, and a suggested build order for re-implementing the block from scratch.
+Diagrams in [`doc/mixer_design.drawio`](doc/mixer_design.drawio) (five tabs,
+uncompressed XML).
+
+The section on AXI4-Stream backpressure is the longest, because the three
+handshake domains here are deliberately decoupled and that decoupling is the
+design: input backpressure must never become output backpressure.
+
 ## Registers
 
 Full map in [doc/axis_video_mixer_regs.md](doc/axis_video_mixer_regs.md);
