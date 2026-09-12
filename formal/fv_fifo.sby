@@ -1,0 +1,60 @@
+# ==============================================================================
+# axis_mixer_fifo
+#
+#   sby -f fv_fifo.sby                 every task
+#   sby -f fv_fifo.sby prove           the unbounded invariants alone
+#
+# Tasks:
+#   bmc     all bound invariants, 30 cycles from reset
+#   prove   the same invariants, unbounded, by k-induction
+#   order   the bounded end-to-end ordering and conservation cross-check. Its
+#           depth is tied to CNT_W in props/fv_fifo_order.sv: the transaction
+#           counters must not be able to wrap inside the run.
+#   cover   occupancy extremes, so a pass cannot be a pass over a dead
+#           environment
+#   depth   the invariants again at P_DEPTH 64, to catch anything that was
+#           accidentally specific to a 3-bit address
+#
+# The proof result is the prove task. bmc is there because it fails fast and
+# produces a readable trace, which is what you want while a property is still
+# being written; prove is what you want once it holds.
+# ==============================================================================
+
+[tasks]
+bmc
+prove
+order
+cover
+depth
+
+[options]
+bmc:   mode bmc
+bmc:   depth 30
+prove: mode prove
+prove: depth 12
+order: mode bmc
+order: depth 16
+cover: mode cover
+cover: depth 24
+depth: mode prove
+depth: depth 12
+
+[engines]
+smtbmc boolector
+
+[script]
+plugin -i slang
+depth: read_slang --top fv_fifo -G P_DEPTH=64 axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo.sv
+order: read_slang --top fv_fifo -G P_DEPTH=4 axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo_order.sv fv_fifo_order_bind.sv fv_fifo.sv
+bmc:   read_slang --top fv_fifo axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo.sv
+prove: read_slang --top fv_fifo axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo.sv
+cover: read_slang --top fv_fifo axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo_order.sv fv_fifo_order_bind.sv fv_fifo.sv
+prep -top fv_fifo
+
+[files]
+../src/axis_mixer_fifo.sv
+props/fv_fifo_props.sv
+props/fv_fifo_bind.sv
+props/fv_fifo_order.sv
+props/fv_fifo_order_bind.sv
+tops/fv_fifo.sv

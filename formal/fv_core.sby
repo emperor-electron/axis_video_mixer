@@ -1,0 +1,95 @@
+# ==============================================================================
+# axis_video_mixer_core, with the layers, their FIFOs and every bound property
+# file underneath.
+#
+#   sby -f fv_core.sby
+#
+# Tasks:
+#   bmc        every invariant in props/fv_core_props.sv, plus the layer and
+#              FIFO invariants re-checked in this context, 24 cycles from reset
+#   prove      the same, unbounded, by k-induction
+#   frame      output framing: TUSER on the first beat of a frame, TLAST on the
+#              last beat of every line, checked against an independent raster
+#              built from accepted beats
+#   datapath   with every layer fully transparent, the composite is the
+#              background exactly, on every lane -- one assertion across the
+#              whole cascade
+#   ppc        the invariants again at P_PPC 2, where a control signal reaching
+#              the wrong lane would show
+#   cover      the interesting states are reachable -- above all, a layer
+#              starving while the output keeps running
+#
+# The headline result is a_raster_advances in the bmc and prove tasks, and
+# a_output_continuous in tops/fv_core.sv: the output does not stop because an
+# input did. See doc/formal.md section 6.
+#
+# frame and datapath are the two slowest tasks in the suite, around two
+# minutes for the pair, and both are configured down hard to get there:
+#
+#   FV_STATIC_CFG    freezes the configuration after reset. Both compare the
+#                    output against a model that has to know the canvas, and
+#                    the beat leaving the pipeline was rastered up to
+#                    P_NUM_LAYERS+2 cycles earlier
+#   FV_MAX_DIM 2     a 2x2 canvas still crosses a line boundary and a frame
+#                    boundary, which is all the framing model needs
+#   FV_CONST_PIXELS  frame only: holds the pixel data at zero. Framing reads
+#                    TUSER, TLAST and the handshakes and never a pixel, so
+#                    freeing the blend cascade's 24-bit operands there costs
+#                    the solver a lot for properties that cannot observe any
+#                    of it. datapath leaves it off, because free pixel data
+#                    behind a zero alpha is exactly what it checks
+#   only fv_core_frame bound
+#                    the FIFO, layer and core invariants are checked by bmc and
+#                    prove, over a FREE configuration rather than a frozen one,
+#                    so carrying them through these two adds nothing
+# ==============================================================================
+
+[tasks]
+bmc
+prove
+frame
+datapath
+ppc
+cover
+
+[options]
+bmc:      mode bmc
+bmc:      depth 24
+prove:    mode prove
+prove:    depth 14
+frame:    mode bmc
+frame:    depth 16
+datapath: mode bmc
+datapath: depth 16
+ppc:      mode bmc
+ppc:      depth 20
+cover:    mode cover
+cover:    depth 30
+
+[engines]
+smtbmc boolector
+
+[script]
+plugin -i slang
+bmc:      read_slang --top fv_core axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_core_props.sv fv_core_bind.sv fv_core.sv
+prove:    read_slang --top fv_core -G FV_CHECK_LIVENESS=0 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_core_props.sv fv_core_bind.sv fv_core.sv
+ppc:      read_slang --top fv_core -G P_PPC=2 -G FV_MAX_DIM=4 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_core_props.sv fv_core_bind.sv fv_core.sv
+frame:    read_slang --top fv_core -G FV_STATIC_CFG=1 -G FV_CONST_PIXELS=1 -G FV_MAX_DIM=2 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_core_frame.sv fv_core_frame_bind.sv fv_core.sv
+datapath: read_slang --top fv_core -G FV_STATIC_CFG=1 -G FV_ALL_TRANSPARENT=1 -G FV_MAX_DIM=2 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_core_frame.sv fv_core_frame_bind.sv fv_core.sv
+cover:    read_slang --top fv_core -G FV_STATIC_CFG=1 -G FV_MAX_DIM=3 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_core_props.sv fv_core_bind.sv fv_core_frame.sv fv_core_frame_bind.sv fv_core.sv
+prep -top fv_core
+
+[files]
+../src/axis_video_mixer_pkg.sv
+../src/axis_mixer_fifo.sv
+../src/axis_mixer_layer.sv
+../src/axis_video_mixer_core.sv
+props/fv_fifo_props.sv
+props/fv_fifo_bind.sv
+props/fv_layer_props.sv
+props/fv_layer_bind.sv
+props/fv_core_props.sv
+props/fv_core_bind.sv
+props/fv_core_frame.sv
+props/fv_core_frame_bind.sv
+tops/fv_core.sv

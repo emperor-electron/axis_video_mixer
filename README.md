@@ -128,6 +128,8 @@ generated map stops elaboration rather than quietly leaving layers unwired.
 
 [`doc/design.md`](doc/design.md) — requirements, every decision and why, the
 traps, and a suggested build order for re-implementing the block from scratch.
+[`doc/formal.md`](doc/formal.md) is its verification companion: what the proofs
+establish, and where the gaps are.
 Diagrams in [`doc/mixer_design.drawio`](doc/mixer_design.drawio) (five tabs,
 uncompressed XML).
 
@@ -195,6 +197,12 @@ disabled mixer never advances its raster, so it never reaches a boundary.
 
 ## Verification
 
+Two suites. Simulation checks that the block produces the right picture from
+realistic stimulus; formal checks that a short list of structural claims hold
+under *every* stimulus. Neither subsumes the other.
+
+### Simulation
+
 ```bash
 cd tb
 make                      # base test
@@ -247,6 +255,37 @@ frame boundaries are seen exactly, rather than by a polling loop in the test.
 Note `make regress` at a non-default `NUM_LAYERS` also needs the register map
 regenerated to match — see *Changing the layer count*.
 
+### Formal
+
+```bash
+make -C formal            # every proof, every task -- about 3m45 from clean
+make -C formal quick      # every bmc task, about 30 s, for use while editing
+```
+
+SymbiYosys with yosys-slang and boolector, all three from the OSS CAD Suite.
+Five proofs over 26 tasks — 135 assertions, 49 cover statements, 15 assumptions
+— in [`formal/`](formal) and documented in
+[`doc/formal.md`](doc/formal.md) — which is where to look for what is bounded
+rather than proved, where each assumption is discharged, and what is not
+covered.
+
+The three claims that motivated it are the ones a directed test cannot make:
+
+| | |
+|---|---|
+| **The output never stalls on an input** | `a_raster_advances` — no combination of starving, faulting or backpressured layers can stop the raster. Proved by induction, not sampled by one starve test. |
+| **Alignment** | A one-beat offset is a picture that looks almost right, and it survives a scoreboard built from the same assumption as the RTL. The counters are proved to stay inside the configured geometry, and a frame proved to deliver exactly `w x h` beats. |
+| **Configuration rejection** | No misaligned or out-of-bounds window can become active, by any path. The solver writes every illegal value there is; a test suite writes the ones someone thought of. |
+
+`div255`'s "verified exhaustively" is now a proof, and it extends to
+`blend_ch` and `blend_rgb`, whose input spaces are 2^24 and larger and were
+never exhausted — alpha 0 and 255 exactly, no overshoot, no channel crosstalk.
+
+What the proofs leave to the bench is **the picture**: no property says the
+composite is the right image for a given set of layer contents, except in the
+all-transparent case. That is what the independently written golden blend is
+for.
+
 ## Files
 
 ```
@@ -259,6 +298,7 @@ src/generated/                   corsair output + the generated array adapter
 src/axis_video_mixer.f           drop-in filelist
 regs/gen_regs.py                 emits regs.json AND the adapter
 tb/                              UVM environment, reusing axi_stream_uvc and axi_lite
+formal/                          SymbiYosys proofs; properties bound in, not inlined
 ```
 
 Consume it from another project with:
@@ -297,3 +337,13 @@ The generated register block drives `ARREADY` from a flop cleared by reset, so
 it accepts an address phase while held in reset and then returns zeroed data
 once reset lifts. A real bus master never transacts during reset; the testbench
 waits, and software should too.
+
+**One outstanding AXI4-Lite write at a time.** The CSR adapter keeps a single
+captured write address — taken on the `AW` handshake, released on the `B`
+handshake — so a second write issued before the first is answered overwrites
+it, and the write-one-to-clear decode for `ERR` then applies to the wrong
+register. AXI4-Lite *permits* multiple outstanding transactions, so this is
+worth stating: the block is safe behind any ordinary master or interconnect,
+which issue one at a time, and unsafe behind one that pipelines. Found by
+formal, where it is now an explicit assumption rather than an undocumented
+property of the implementation — §7 of [`doc/formal.md`](doc/formal.md).

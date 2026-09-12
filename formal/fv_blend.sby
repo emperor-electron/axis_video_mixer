@@ -1,0 +1,45 @@
+# ==============================================================================
+# Blend arithmetic in axis_video_mixer_pkg.
+#
+#   sby -f fv_blend.sby              every group
+#   sby -f fv_blend.sby div bound    selected groups
+#
+# Every task is a two-step BMC. The properties are combinational, the inputs
+# are free every cycle, and there is no state to unroll -- so two steps cover
+# the whole input space and a pass is an exhaustive statement over it.
+#
+# The groups exist for solver cost, not for tidiness: checked as a single query
+# the file did not discharge in ten minutes, and the two groups holding more
+# than one instance of the 8x8 multiplier (bound, mono) are where that cost
+# lives. See the header of tops/fv_blend.sv.
+# ==============================================================================
+
+[tasks]
+div
+scale
+blend
+bound
+mono
+cover
+
+[options]
+depth 2
+~cover: mode bmc
+cover: mode cover
+
+[engines]
+smtbmc boolector
+
+[script]
+plugin -i slang
+div:   read_slang --top fv_blend -G FV_GROUP=1 axis_video_mixer_pkg.sv fv_blend.sv
+scale: read_slang --top fv_blend -G FV_GROUP=2 axis_video_mixer_pkg.sv fv_blend.sv
+blend: read_slang --top fv_blend -G FV_GROUP=3 axis_video_mixer_pkg.sv fv_blend.sv
+bound: read_slang --top fv_blend -G FV_GROUP=4 axis_video_mixer_pkg.sv fv_blend.sv
+mono:  read_slang --top fv_blend -G FV_GROUP=5 axis_video_mixer_pkg.sv fv_blend.sv
+cover: read_slang --top fv_blend -G FV_GROUP=0 axis_video_mixer_pkg.sv fv_blend.sv
+prep -top fv_blend
+
+[files]
+../src/axis_video_mixer_pkg.sv
+tops/fv_blend.sv

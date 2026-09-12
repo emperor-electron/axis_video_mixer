@@ -475,6 +475,14 @@ Ranked by how long each one cost.
 
 ## 8. Verification
 
+Two suites, answering different questions. `cd tb && make regress` checks that
+the block produces the right picture from realistic stimulus;
+`make -C formal` checks that a short list of structural claims hold under
+*every* stimulus. Neither subsumes the other, and §8.2 is about where the line
+falls.
+
+### 8.1 Simulation
+
 `cd tb && make regress`. Nine tests; the ones that earn their place:
 
 | Test | Requirement |
@@ -504,6 +512,41 @@ Two properties of the bench worth copying:
 Mutation-test the bench before believing it. Reverse the hash word order,
 transpose a window, swap two layers — if the suite still passes, it is not
 testing what you think.
+
+### 8.2 Formal
+
+`make -C formal`, about three and three-quarter minutes. Five proofs, 26
+tasks, in
+[`formal/`](../formal), documented in full in [`formal.md`](formal.md) — including what is bounded rather than
+proved, where every assumption is discharged, and what is not covered.
+
+Three things here are the wrong shape for directed tests, and they are why the
+flow exists:
+
+| | |
+|---|---|
+| **R6** | "The output never stalls waiting on an input" is a claim about all possible input behaviour. `mixer_starve_test` stops one source at one moment; `a_raster_advances` says no combination of starving, faulting and backpressured layers can stop the raster, and proves it by induction. |
+| **§4** | Alignment is a counter invariant, which is what induction is good at. A one-beat offset is not a crash — it is a picture that looks almost right, and it survives a scoreboard built from the same assumption as the RTL. |
+| **R12** | Rejection logic is only ever exercised by tests that deliberately write bad values. The solver writes every bad value there is, every cycle; the claim proved is not "the validation looks right" but "no illegal window can become active, by any path". |
+
+Two more fall out cheaply. The blend arithmetic (§5.2) is combinational logic
+over a small input space, where formal was always the right tool — `div255`'s
+"verified exhaustively" is now a proof, and it extends to `blend_ch` and
+`blend_rgb`, whose input spaces are 2²⁴ and larger and were never exhausted.
+And the AXI4-Lite port is generated code nobody reads, where a protocol
+violation wedges a processor bus rather than producing a wrong picture.
+
+What the proofs deliberately leave to the bench: **the picture**. No property
+says the composite is the right image for a given set of layer contents, except
+in the all-transparent case. The independently written golden blend is the right
+tool for that, and the two suites divide along exactly that line — the bench
+checks values from realistic stimulus, the proofs check the arithmetic
+identities it cannot exhaust and the structural claims it cannot generalise.
+
+One finding worth carrying back into the design record: `axis_video_mixer_csr`
+keeps a single captured write address, so it is correct for **one outstanding
+AXI4-Lite write at a time**. That is safe behind any ordinary master or
+interconnect and unsafe behind one that pipelines. §7 of `formal.md` has it.
 
 ---
 

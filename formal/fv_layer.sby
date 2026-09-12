@@ -1,0 +1,70 @@
+# ==============================================================================
+# axis_mixer_layer, with axis_mixer_fifo and its bound properties underneath.
+#
+#   sby -f fv_layer.sby
+#
+# Tasks:
+#   bmc       every bound invariant, 30 cycles from reset
+#   prove     the same, unbounded, by k-induction
+#   align     bounded positional accounting over a small geometry -- the claim
+#             that ln_cnt and bt_cnt really do say where the buffered beats
+#             came from (props/fv_layer_align.sv)
+#   watchdog  the source-stall threshold both fires and never misfires, with
+#             stall_limit held small enough to be reachable
+#   cover     the interesting states are reachable, so nothing above passed
+#             over a dead environment
+#   ppc       the invariants again at P_PPC 2, to show nothing depended on a
+#             one-pixel beat
+#
+# fv_fifo_props is bound in here as well as in fv_fifo.sby. That is the point
+# of binding rather than inlining: the FIFO's own invariants get re-checked
+# against the way this block actually drives it, and the layer is what makes
+# the FIFO's producer-side assumption true.
+# ==============================================================================
+
+[tasks]
+bmc
+prove
+align
+watchdog
+cover
+ppc
+
+[options]
+bmc:      mode bmc
+bmc:      depth 30
+prove:    mode prove
+prove:    depth 14
+align:    mode bmc
+align:    depth 40
+watchdog: mode bmc
+watchdog: depth 24
+cover:    mode cover
+cover:    depth 40
+ppc:      mode prove
+ppc:      depth 14
+
+[engines]
+smtbmc boolector
+
+[script]
+plugin -i slang
+bmc:      read_slang --top fv_layer axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_layer.sv
+prove:    read_slang --top fv_layer axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_layer.sv
+ppc:      read_slang --top fv_layer -G P_PPC=2 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_layer.sv
+watchdog: read_slang --top fv_layer -G FV_MAX_STALL=3 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_layer.sv
+align:    read_slang --top fv_layer -G FV_MAX_BEATS=3 -G FV_MAX_LINES=3 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_layer_align.sv fv_layer_align_bind.sv fv_layer.sv
+cover:    read_slang --top fv_layer -G FV_MAX_BEATS=3 -G FV_MAX_LINES=3 -G FV_MAX_STALL=3 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_layer_align.sv fv_layer_align_bind.sv fv_layer.sv
+prep -top fv_layer
+
+[files]
+../src/axis_video_mixer_pkg.sv
+../src/axis_mixer_fifo.sv
+../src/axis_mixer_layer.sv
+props/fv_fifo_props.sv
+props/fv_fifo_bind.sv
+props/fv_layer_props.sv
+props/fv_layer_bind.sv
+props/fv_layer_align.sv
+props/fv_layer_align_bind.sv
+tops/fv_layer.sv
