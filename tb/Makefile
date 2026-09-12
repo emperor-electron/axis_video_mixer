@@ -14,6 +14,18 @@
 # Common overrides:
 #   TEST, SEED, UVM_VERBOSITY, WAVES, PLUSARGS, VIVADO_PATH
 #   CANVAS_W, CANVAS_H, NUM_LAYERS, FIFO_DEPTH
+#   PPC                pixels per beat: 1, 2, 4 or 8
+#
+# PPC is a compile-time define, not a generic, because the link width the UVC
+# is specialised on follows from it -- so changing it rebuilds rather than just
+# re-elaborates. The snapshot name carries it for the same reason the canvas
+# size is carried: so switching does not silently reuse the other one's build.
+#
+# PPC > 1 also needs the register map regenerated, because CAPS.PPC is a
+# constant in it and the CSR refuses a build that disagrees. `make ppc-sweep`
+# does that for each value and restores the committed PPC=1 map afterwards;
+# `make regen-ppc` does it once, deliberately, since it rewrites checked-in
+# generated files.
 #
 # The canvas defaults to 64x8 so a frame is 512 beats and the regression runs
 # in moments. It is passed to xelab as a generic on mixer_tb_top, so nothing in
@@ -36,8 +48,10 @@ TOP             ?= mixer_tb_top
 TEST            ?= mixer_base_test
 SEED            ?= random
 UVM_VERBOSITY   ?= UVM_LOW
-SNAPSHOT        ?= $(TOP)_$(CANVAS_W)x$(CANVAS_H)_snap
+SNAPSHOT        ?= $(TOP)_$(CANVAS_W)x$(CANVAS_H)_ppc$(PPC)_snap
 
+PPC             ?= 1
+PPC             ?= 1
 CANVAS_W        ?= 64
 CANVAS_H        ?= 8
 NUM_LAYERS      ?= 4
@@ -59,7 +73,7 @@ TB_FILELIST     := filelist.f
 # SIMULATION turns on the in-RTL assertions. The generated register block has
 # no `timescale of its own, so one is supplied to xelab for the whole design;
 # without it elaboration fails outright rather than defaulting.
-XVLOG_OPTS      := -sv -L uvm -d SIMULATION
+XVLOG_OPTS      := -sv -L uvm -d SIMULATION -d MIX_PPC=$(PPC)
 XELAB_OPTS      := -L uvm -timescale 1ns/1ps --debug typical -d SIMULATION \
                    --generic_top "CANVAS_W=$(CANVAS_W)" \
                    --generic_top "CANVAS_H=$(CANVAS_H)" \
@@ -80,7 +94,7 @@ REGRESS_TESTS   := mixer_base_test \
                    mixer_geometry_error_test \
                    mixer_bad_config_test
 
-.PHONY: all compile elab run regress full waves gui clean help
+.PHONY: regen-ppc ppc-sweep all compile elab run regress full waves gui clean help
 
 all: run
 
@@ -149,3 +163,30 @@ help:
 	@echo "targets: all compile elab run regress full waves gui clean"
 	@echo "tests:"
 	@for t in $(REGRESS_TESTS); do echo "    $$t"; done
+
+
+# ------------------------------------------------------------------------------
+# Multi-pixel-per-clock
+# ------------------------------------------------------------------------------
+# Regenerate the register map for PPC. Rewrites files under ../src/generated and
+# ../doc, so it is its own target rather than a dependency of `all`.
+regen-ppc:
+	cd ../regs && ./gen_regs.py -p $(PPC) && corsair -r regs.json -c csrconfig
+
+# Every supported PPC in turn, full regression at each, then put the committed
+# PPC=1 map back so the tree is left as it was found.
+#
+# The canvas is 64 wide, which is a whole number of beats at all four values --
+# the DUT rejects a canvas that is not, so a sweep that did not respect that
+# would be testing the error path rather than the datapath.
+ppc-sweep:
+	@rc=0; \
+	for p in 1 2 4 8; do \
+	  echo "=================== PPC=$$p ==================="; \
+	  $(MAKE) --no-print-directory regen-ppc PPC=$$p >/dev/null || { rc=1; continue; }; \
+	  $(MAKE) --no-print-directory regress PPC=$$p || rc=1; \
+	done; \
+	echo "=== restoring the committed PPC=1 map ==="; \
+	$(MAKE) --no-print-directory regen-ppc PPC=1 >/dev/null; \
+	echo; echo "ppc sweep $$([ $$rc -eq 0 ] && echo PASSED || echo FAILED)"; \
+	exit $$rc

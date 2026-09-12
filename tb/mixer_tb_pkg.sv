@@ -29,7 +29,18 @@ package mixer_tb_pkg;
   // mixer_tb_top so that xelab --generic_top can shrink the raster for a fast
   // regression without touching the link types.
   // ---------------------------------------------------------------------
-  parameter int MIX_DATA_BYTES = 4;  // RGBA8
+  // Pixels per beat. A compile-time define rather than a parameter because a
+  // SystemVerilog package cannot be parameterised, and the link WIDTH -- which
+  // the UVC types below are specialised on -- has to follow it.
+  //
+  //   make PPC=4 regress
+  //
+`ifndef MIX_PPC
+`define MIX_PPC 1
+`endif
+  parameter int MIX_PPC = `MIX_PPC;
+
+  parameter int MIX_DATA_BYTES = 4 * MIX_PPC;  // RGBA8 x PPC, lane 0 in the low bytes
   parameter int MIX_ID_WIDTH   = 0;
   parameter int MIX_DEST_WIDTH = 0;
   parameter int MIX_USER_WIDTH = 1;  // TUSER[0] = SOF

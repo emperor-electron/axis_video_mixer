@@ -35,6 +35,16 @@ class mixer_base_test extends uvm_test;
   extern virtual task run_phase(uvm_phase phase);
 
   // ---- Register access helpers ----------------------------------------
+  // One output frame, in BEATS -- which is what a cycle count has to be scaled
+  // against once a beat can carry more than one pixel. A wait written in
+  // pixels covers PPC times as many frames as it looks like it does.
+  extern virtual function int unsigned out_frame_beats();
+  // Poll a layer's ARMED bit rather than waiting a fixed time for it. A fixed
+  // wait has to be long enough for the layer to arm and short enough that its
+  // source has not run dry again, and those two bracket a window that moves
+  // with PPC. Polling has no such window.
+  extern virtual task wait_layer_armed(int unsigned layer, int unsigned timeout_beats);
+
   extern virtual task wait_for_reset();
   extern virtual task reg_write(int unsigned addr, logic [31:0] data);
   extern virtual task reg_read(int unsigned addr, output logic [31:0] data);
@@ -117,6 +127,25 @@ endfunction : build_phase
 // returns the zeroed read data once reset lifts. A real bus master never
 // transacts during reset, and neither should the testbench. Waiting here is
 // what makes the first register read mean something.
+function int unsigned mixer_base_test::out_frame_beats();
+  return (canvas_w / MIX_PPC) * canvas_h;
+endfunction : out_frame_beats
+
+
+task mixer_base_test::wait_layer_armed(int unsigned layer, int unsigned timeout_beats);
+  logic [31:0] st;
+  int unsigned waited = 0;
+
+  forever begin
+    reg_read(layer_reg(layer, REG_L_STATUS), st);
+    if (st[0]) return;
+    if (waited >= timeout_beats) return;
+    repeat (16) @(posedge env.axil_agent.vif.aclk);
+    waited += 16;
+  end
+endtask : wait_layer_armed
+
+
 task mixer_base_test::wait_for_reset();
   if (env.axil_agent.vif.aresetn !== 1'b1) begin
     @(posedge env.axil_agent.vif.aresetn);
@@ -618,12 +647,15 @@ class mixer_starve_test extends mixer_base_test;
         mixer_layer_partial_seq s = mixer_layer_partial_seq::type_id::create("l1_partial");
         s.layer = 1;
         s.width = canvas_w / 2;
-        s.beats = (canvas_w / 2) * 2;
+        // Two lines' worth, which is half of this layer's four-line frame.
+        // In BEATS, so it has to be divided by PPC -- expressed in pixels it
+        // would send whole frames at PPC > 1 and never starve at all.
+        s.beats = ((canvas_w / 2) / MIX_PPC) * 2;
         s.start(env.layer_agent[1].sequencer);
       end
     join
 
-    repeat (canvas_w * canvas_h * 2) @(posedge env.axil_agent.vif.aclk);
+    repeat (out_frame_beats() * 2) @(posedge env.axil_agent.vif.aclk);
 
     reg_read(REG_ERR, err);
     reg_read(REG_ERR_LAYER, err_layer);
@@ -634,7 +666,7 @@ class mixer_starve_test extends mixer_base_test;
 
     // Liveness across the starve is the real assertion here.
     reg_read(REG_FRAME_COUNT, fc0);
-    repeat (canvas_w * canvas_h * 2) @(posedge env.axil_agent.vif.aclk);
+    repeat (out_frame_beats() * 2) @(posedge env.axil_agent.vif.aclk);
     reg_read(REG_FRAME_COUNT, fc1);
     if (fc1 <= fc0) begin
       `uvm_error("STARVE",
@@ -657,7 +689,7 @@ class mixer_starve_test extends mixer_base_test;
       s.start(env.layer_agent[1].sequencer);
     end
 
-    repeat (canvas_w * canvas_h) @(posedge env.axil_agent.vif.aclk);
+    wait_layer_armed(1, out_frame_beats() * 2);
     reg_read(layer_reg(1, REG_L_STATUS), l1_status);
     if (!l1_status[0]) `uvm_error("STARVE", "layer 1 never re-armed after its source resumed");
 
@@ -705,11 +737,14 @@ class mixer_geometry_error_test extends mixer_base_test;
       s.width    = canvas_w;
       s.height   = canvas_h;
       s.frames   = 1;
-      s.tlast_at = int'(canvas_w) - 2;  // one pixel early
+      // One BEAT early. The corruption knobs index beats, so at PPC > 1 a
+      // pixel count here would land somewhere unrelated -- possibly on a real
+      // line boundary, which would not be a fault at all.
+      s.tlast_at = int'(canvas_w / MIX_PPC) - 2;
       s.start(env.layer_agent[0].sequencer);
     end
 
-    repeat (canvas_w * canvas_h) @(posedge env.axil_agent.vif.aclk);
+    repeat (out_frame_beats() * 2) @(posedge env.axil_agent.vif.aclk);
 
     reg_read(REG_ERR, err);
     reg_read(REG_ERR_LAYER, err_layer);
@@ -717,7 +752,7 @@ class mixer_geometry_error_test extends mixer_base_test;
     if (!err_layer[0]) `uvm_error("GEOM", "ERR_LAYER did not name layer 0");
 
     reg_read(REG_FRAME_COUNT, fc0);
-    repeat (canvas_w * canvas_h * 2) @(posedge env.axil_agent.vif.aclk);
+    repeat (out_frame_beats() * 2) @(posedge env.axil_agent.vif.aclk);
     reg_read(REG_FRAME_COUNT, fc1);
     if (fc1 <= fc0) `uvm_error("GEOM", "output stopped after a geometry fault");
 
@@ -795,7 +830,7 @@ class mixer_bad_config_test extends mixer_base_test;
 
     // Rejecting a configuration must not take the output down with it.
     reg_read(REG_FRAME_COUNT, fc0);
-    repeat (canvas_w * canvas_h * 2) @(posedge env.axil_agent.vif.aclk);
+    repeat (out_frame_beats() * 2) @(posedge env.axil_agent.vif.aclk);
     reg_read(REG_FRAME_COUNT, fc1);
     if (fc1 <= fc0) `uvm_error("CFG", "output stopped after a rejected configuration");
 

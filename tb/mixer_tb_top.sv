@@ -33,6 +33,11 @@ module mixer_tb_top;
   // rather than hiding behind capacity.
   parameter int FIFO_DEPTH = 128;
 
+  // Pixels per beat comes from the package, which takes it from the MIX_PPC
+  // define. Deliberately NOT a generic as well: two ways to set the same thing
+  // is two ways for them to disagree, and the link width the UVC is
+  // specialised on already follows the define.
+
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Clock and reset
   ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -69,7 +74,7 @@ module mixer_tb_top;
 
   for (genvar gi = 0; gi < NUM_LAYERS; gi++) begin : g_layer_wire
     assign s_tvalid[gi] = layer_if[gi].tvalid;
-    assign s_tdata[gi*32+:32] = layer_if[gi].tdata;
+    assign s_tdata[gi*MIX_DATA_BYTES*8+:MIX_DATA_BYTES*8] = layer_if[gi].tdata;
     assign s_tuser[gi] = layer_if[gi].tuser[0];
     assign s_tlast[gi] = layer_if[gi].tlast;
     assign layer_if[gi].tready = s_tready[gi];
@@ -80,7 +85,7 @@ module mixer_tb_top;
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   logic        m_tvalid;
   logic        m_tready;
-  logic [31:0] m_tdata;
+  logic [MIX_DATA_BYTES*8-1:0] m_tdata;
   logic        m_tuser;
   logic        m_tlast;
   logic        irq;
@@ -99,6 +104,7 @@ module mixer_tb_top;
       .P_NUM_LAYERS   (NUM_LAYERS),
       .P_FIFO_DEPTH   (FIFO_DEPTH),
       .P_OUT_HAS_ALPHA(1'b1),
+      .P_PPC          (MIX_PPC),
       .P_AXIL_ADDR_W  (12)
   ) dut (
       .clk  (aclk),

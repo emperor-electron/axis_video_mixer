@@ -54,7 +54,7 @@
                 },
                 {
                     "name": "FIFO_DEPTH_LOG2",
-                    "description": "Per-layer input FIFO depth, as a power of two. A layer wider than 2**this cannot be guaranteed free of underflow.",
+                    "description": "Per-layer input FIFO depth in BEATS, as a power of two. A layer wider than PPC * 2**this cannot be guaranteed free of underflow, because a window at x = 0 gets no head start within the output line.",
                     "reset": 11,
                     "width": 8,
                     "lsb": 8,
@@ -64,10 +64,20 @@
                 },
                 {
                     "name": "OUT_HAS_ALPHA",
-                    "description": "1 if the output stream carries RGBA8 (32-bit TDATA), 0 if it carries RGB8 (24-bit TDATA) with alpha discarded after blending.",
+                    "description": "1 if the output stream carries RGBA8 per pixel, 0 if it carries RGB8 with alpha discarded after blending.",
                     "reset": 1,
                     "width": 1,
                     "lsb": 16,
+                    "access": "ro",
+                    "hardware": "f",
+                    "enums": []
+                },
+                {
+                    "name": "PPC",
+                    "description": "Pixels per beat on every stream, 1, 2, 4 or 8. Also the horizontal alignment granularity: CANVAS.WIDTH, Ln_POS.X and Ln_SIZE.WIDTH must all be multiples of this, and a write that is not is rejected with ERR.CFG rather than rounded. Read it before computing a layout.",
+                    "reset": 1,
+                    "width": 8,
+                    "lsb": 24,
                     "access": "ro",
                     "hardware": "f",
                     "enums": []

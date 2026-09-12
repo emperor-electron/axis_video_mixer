@@ -18,6 +18,7 @@
 
 module axis_video_mixer_csr #(
     parameter int P_NUM_LAYERS = 4,
+    parameter int P_PPC = 1,
     parameter int P_ADDR_W     = 12
 ) (
     input logic clk,
@@ -100,6 +101,13 @@ module axis_video_mixer_csr #(
     if (P_NUM_LAYERS != 4) begin
       $fatal(1, "axis_video_mixer_csr: P_NUM_LAYERS=%0d but the register map was generated for 4",
              P_NUM_LAYERS);
+    end
+    // CAPS.PPC is a constant in the generated map. A build whose P_PPC differs
+    // would report an alignment granularity it does not enforce, and software
+    // would compute a layout the hardware then rejects.
+    if (P_PPC != 1) begin
+      $fatal(1, "axis_video_mixer_csr: P_PPC=%0d but the register map was generated for 1",
+             P_PPC);
     end
   end
 

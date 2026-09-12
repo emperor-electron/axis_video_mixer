@@ -15,6 +15,7 @@ module axis_video_mixer_regs #(
     // CAPS.NUM_LAYERS
     // CAPS.FIFO_DEPTH_LOG2
     // CAPS.OUT_HAS_ALPHA
+    // CAPS.PPC
 
     // SCRATCH.VALUE
 
@@ -386,7 +387,7 @@ end
 // [0x4] - CAPS - Build-time capabilities, so software can size its own layer loops from the hardware it is actually talking to instead of from a compile-time assumption. These are constants baked into the map by gen_regs.py; axis_video_mixer.sv asserts at elaboration that they match the RTL parameters, so a map and a build that disagree fail loudly rather than misreporting.
 //------------------------------------------------------------------------------
 wire [31:0] csr_caps_rdata;
-assign csr_caps_rdata[31:17] = 15'h0;
+assign csr_caps_rdata[23:17] = 7'h0;
 
 
 wire csr_caps_ren;
@@ -422,7 +423,7 @@ end
 
 //---------------------
 // Bit field:
-// CAPS[15:8] - FIFO_DEPTH_LOG2 - Per-layer input FIFO depth, as a power of two. A layer wider than 2**this cannot be guaranteed free of underflow.
+// CAPS[15:8] - FIFO_DEPTH_LOG2 - Per-layer input FIFO depth in BEATS, as a power of two. A layer wider than PPC * 2**this cannot be guaranteed free of underflow, because a window at x = 0 gets no head start within the output line.
 // access: ro, hardware: f
 //---------------------
 reg [7:0] csr_caps_fifo_depth_log2_ff;
@@ -443,7 +444,7 @@ end
 
 //---------------------
 // Bit field:
-// CAPS[16] - OUT_HAS_ALPHA - 1 if the output stream carries RGBA8 (32-bit TDATA), 0 if it carries RGB8 (24-bit TDATA) with alpha discarded after blending.
+// CAPS[16] - OUT_HAS_ALPHA - 1 if the output stream carries RGBA8 per pixel, 0 if it carries RGB8 with alpha discarded after blending.
 // access: ro, hardware: f
 //---------------------
 reg  csr_caps_out_has_alpha_ff;
@@ -457,6 +458,27 @@ always @(posedge clk) begin
     end else  begin
       begin
             csr_caps_out_has_alpha_ff <= csr_caps_out_has_alpha_ff;
+        end
+    end
+end
+
+
+//---------------------
+// Bit field:
+// CAPS[31:24] - PPC - Pixels per beat on every stream, 1, 2, 4 or 8. Also the horizontal alignment granularity: CANVAS.WIDTH, Ln_POS.X and Ln_SIZE.WIDTH must all be multiples of this, and a write that is not is rejected with ERR.CFG rather than rounded. Read it before computing a layout.
+// access: ro, hardware: f
+//---------------------
+reg [7:0] csr_caps_ppc_ff;
+
+assign csr_caps_rdata[31:24] = csr_caps_ppc_ff;
+
+
+always @(posedge clk) begin
+    if (!rst) begin
+        csr_caps_ppc_ff <= 8'h1;
+    end else  begin
+      begin
+            csr_caps_ppc_ff <= csr_caps_ppc_ff;
         end
     end
 end

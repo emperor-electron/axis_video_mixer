@@ -25,7 +25,10 @@ package axis_video_mixer_pkg;
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Pixel geometry
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  localparam int PX_W  = 32;  // RGBA8 stream width
+  // ONE PIXEL. Not one beat -- a beat carries P_PPC of these side by side.
+  // Everything in this package works on single pixels; the lane fan-out lives
+  // in the core, so the arithmetic never has to know how wide a beat is.
+  localparam int PX_W  = 32;  // RGBA8, one pixel
   localparam int RGB_W = 24;  // colour without alpha
   localparam int CH_W  = 8;   // one colour channel
 
@@ -34,8 +37,24 @@ package axis_video_mixer_pkg;
   // Identification, mirrored from regs/gen_regs.py. The RTL checks these against
   // the generated register block at elaboration so a stale regs.json cannot ship.
   localparam logic [15:0] MIXER_MAGIC = 16'h4D58;  // ASCII 'MX'
-  localparam logic [ 7:0] MIXER_VER_MAJOR = 8'd1;
+  localparam logic [ 7:0] MIXER_VER_MAJOR = 8'd2;  // 2: multi-pixel-per-clock
   localparam logic [ 7:0] MIXER_VER_MINOR = 8'd0;
+
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Pixels per clock
+  //
+  // A beat carries P_PPC pixels, lane 0 in the LEAST significant bits, so lane j
+  // of a beat is canvas x = out_x + j. That order matters and is worth stating
+  // once: it matches the byte order an AXI4-Stream carries on the wire, so a
+  // width converter placed in front of a layer produces lanes in the order this
+  // block expects with no reversal.
+  //
+  // Only powers of two are supported, because every conversion between pixels
+  // and beats in the datapath is then a shift rather than a divide.
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  function automatic bit ppc_legal(input int p);
+    return (p == 1) || (p == 2) || (p == 4) || (p == 8);
+  endfunction
 
   // ALPHA_SRC encoding, mirrored from the register map.
   localparam logic ALPHA_PIXEL_X_GLOBAL = 1'b0;

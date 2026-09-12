@@ -151,15 +151,27 @@ function void mixer_scoreboard::write(axi_stream_seq_item t);
   bit exp_sof, exp_eol;
   logic [23:0] got_rgb, exp_rgb;
   logic [7:0] got_alpha;
+  int unsigned w_beats;
+  int unsigned bx;
+  int unsigned lane_x;
+  int unsigned base;
 
   beats_seen++;
+
+  // The model still walks the raster in PIXELS -- x is a pixel coordinate --
+  // because that is the coordinate expected_rgb() and the layer windows are
+  // expressed in. Only the framing checks and the byte extraction work in
+  // beats, which is the smallest change that keeps the model independent of
+  // how the DUT happens to pack its output.
+  w_beats = canvas_w / MIX_PPC;
+  bx      = x / MIX_PPC;
 
   // ---- Framing -------------------------------------------------------
   // SOF must appear on the first pixel of a frame and nowhere else. Checked
   // before anything else because every pixel comparison below depends on the
   // model and the DUT agreeing on where in the raster this beat sits.
   exp_sof = (x == 0) && (y == 0);
-  exp_eol = (x == (canvas_w - 1));
+  exp_eol = (bx == (w_beats - 1));
 
   if (!seen_sof) begin
     if (!t.tuser[0]) begin
@@ -175,42 +187,51 @@ function void mixer_scoreboard::write(axi_stream_seq_item t);
 
   if (t.tlast != exp_eol) begin
     framing_errors++;
-    `uvm_error("EOL", $sformatf("TLAST=%0b at (%0d,%0d), expected %0b (line is %0d wide)",
-                                t.tlast, x, y, exp_eol, canvas_w))
+    `uvm_error("EOL", $sformatf({"TLAST=%0b at beat %0d of line %0d, expected %0b (line is %0d ",
+                                 "pixels = %0d beats at PPC %0d)"}, t.tlast, bx, y, exp_eol,
+                                canvas_w, w_beats, MIX_PPC))
   end
 
   // ---- Pixel content --------------------------------------------------
-  // tdata[0] is TDATA[7:0]. With alpha on the output that is the alpha byte,
-  // which the DUT forces opaque because everything below the top layer has
-  // already been composited in.
-  if (out_has_alpha) begin
-    got_alpha = t.tdata[0];
-    got_rgb   = {t.tdata[3], t.tdata[2], t.tdata[1]};
-    if (got_alpha !== 8'hFF) begin
-      pixel_errors++;
-      `uvm_error("ALPHA", $sformatf("output alpha at (%0d,%0d) is 0x%02h, expected 0xFF", x, y,
-                                    got_alpha))
-    end
-  end else begin
-    got_rgb = {t.tdata[2], t.tdata[1], t.tdata[0]};
-  end
+  // One beat carries MIX_PPC pixels, lane 0 in the low bytes. Every lane is
+  // checked: a fault confined to one lane -- a mis-indexed replica of the
+  // cascade, say -- would otherwise show up only as a vertical stripe that a
+  // lane-0-only check would miss entirely.
+  for (int unsigned j = 0; j < MIX_PPC; j++) begin
+    lane_x = (bx * MIX_PPC) + j;
+    base   = j * (out_has_alpha ? 4 : 3);
 
-  if (check_pixels && (frames_seen >= check_from_frame) &&
-      (frames_seen < check_until_frame)) begin
-    exp_rgb = expected_rgb(x, y);
-    if (got_rgb !== exp_rgb) begin
-      pixel_errors++;
-      // Capped so a systematic fault does not bury the log; the count in the
-      // report is the honest total.
-      if (pixel_errors <= 20) begin
-        `uvm_error("PIXEL", $sformatf("(%0d,%0d) frame %0d: got 0x%06h, expected 0x%06h", x, y,
-                                      frames_seen, got_rgb, exp_rgb))
+    if (out_has_alpha) begin
+      got_alpha = t.tdata[base];
+      got_rgb   = {t.tdata[base+3], t.tdata[base+2], t.tdata[base+1]};
+      if (got_alpha !== 8'hFF) begin
+        pixel_errors++;
+        if (pixel_errors <= 20) begin
+          `uvm_error("ALPHA", $sformatf("output alpha at (%0d,%0d) lane %0d is 0x%02h, expected 0xFF",
+                                        lane_x, y, j, got_alpha))
+        end
+      end
+    end else begin
+      got_rgb = {t.tdata[base+2], t.tdata[base+1], t.tdata[base]};
+    end
+
+    if (check_pixels && (frames_seen >= check_from_frame) &&
+        (frames_seen < check_until_frame)) begin
+      exp_rgb = expected_rgb(lane_x, y);
+      if (got_rgb !== exp_rgb) begin
+        pixel_errors++;
+        // Capped so a systematic fault does not bury the log; the count in the
+        // report is the honest total.
+        if (pixel_errors <= 20) begin
+          `uvm_error("PIXEL", $sformatf("(%0d,%0d) lane %0d frame %0d: got 0x%06h, expected 0x%06h",
+                                        lane_x, y, j, frames_seen, got_rgb, exp_rgb))
+        end
       end
     end
   end
 
-  // ---- Advance the raster ---------------------------------------------
-  if (x == (canvas_w - 1)) begin
+  // ---- Advance the raster, one whole beat ------------------------------
+  if (bx == (w_beats - 1)) begin
     x = 0;
     if (y == (canvas_h - 1)) begin
       y = 0;
@@ -221,7 +242,7 @@ function void mixer_scoreboard::write(axi_stream_seq_item t);
       y++;
     end
   end else begin
-    x++;
+    x += MIX_PPC;
   end
 endfunction : write
 

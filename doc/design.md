@@ -41,6 +41,8 @@ Numbered so the verification plan in §8 can cite them.
 | **R8** | Every fault is latched, attributable to a layer, and clearable: `CFG`, `STARVE`, `GEOM`, `SRC_STALL`, `OUT_STALL`. |
 | **R9** | Single clock domain — every input stream, the output, and the AXI4-Lite port. |
 | **R10** | `N` is a parameter. The register map is generated from the same number. |
+| **R11** | `P_PPC` ∈ {1, 2, 4, 8} pixels per beat, on **every** stream — all `N` inputs and the output. Lane 0 in the least significant bits. |
+| **R12** | Horizontal geometry — `CANVAS.WIDTH`, every `Ln_POS.X`, every `Ln_SIZE.WIDTH` — must be a multiple of `P_PPC`. A value that is not is **rejected** with `ERR.CFG`, never rounded. `CAPS.PPC` reports the granularity. |
 
 ### 1.2 Explicit non-goals
 
@@ -49,6 +51,13 @@ Numbered so the verification plan in §8 can cite them.
 - **Clock domain crossing.** Put an AXI4-Stream clock converter in front of a
   layer if it needs one. Absorbing it here would mean `N` asynchronous FIFOs
   whether or not anyone needed them.
+- **Per-interface pixel width.** `P_PPC` is one number for the whole block, not
+  one per input. §9.1 gives the reasoning; the short version is that a source at
+  a different width belongs behind an AXI4-Stream width converter, for exactly
+  the same reason a source on another clock belongs behind a clock converter.
+- **Sub-beat horizontal placement.** At `P_PPC > 1` a layer lands on a
+  `P_PPC`-pixel grid horizontally (R12). Vertical placement is unconstrained.
+  §10 is the whole chapter on lifting this, because it is the interesting part.
 - **Run-time z-order.** See §5.4.
 - **Colour space conversion**, chroma subsampling, more than one pixel per beat.
 
@@ -350,6 +359,11 @@ order the traps in §7 surface.
 | 8 | The layer FSM: `armed`, then `active` | arm a layer mid-frame deliberately and watch §4 happen |
 | 9 | Frame-boundary latch, then the register map | §6.1 |
 | 10 | Errors and watchdogs | last, because every one of them needs a way to provoke it |
+| 11 | `P_PPC > 1` | §9. Do it after step 10, not before — every bug above is easier to find with one pixel per beat, and the multi-pixel version is a replication of a design that already works |
+
+For step 11 the single most valuable test is a mutation that is **invisible at
+`P_PPC = 1`**: make every lane composite lane 0's pixel. If your suite still
+passes at `P_PPC = 4`, it is checking lane 0 and calling it a beat.
 
 Step 6 is the one to spend time on. If the pixel stream under random
 backpressure is not bit-identical to the unstalled stream, something is not
@@ -367,9 +381,10 @@ pipe_en   = m_axis_tready || !m_axis_tvalid;   // gates ALL datapath state
 s_tready  = enable ? !fifo_full : 1'b1;        // drain a disabled layer
 m_tvalid  = v_q[N];                            // registered. never from tready
 
-// ---- consuming a layer ------------------------------------------------
-in_win[i] = act_en[i] && out_x >= x[i] && out_x < x[i]+w[i]
-                      && out_y >= y[i] && out_y < y[i]+h[i];
+// ---- consuming a layer (beat domain; at PPC=1 a beat is a pixel) -------
+out_bx    = beat index across the canvas, 0 .. W/P - 1
+in_win[i] = act_en[i] && out_bx >= bx[i] && out_bx < bx[i]+bw[i]
+                      && out_y  >=  y[i] && out_y  <  y[i]+h[i];
 want_px[i]= in_win[i] && lay_active[i] && !lay_dropped[i];
 pop[i]    = want_px[i] &&  px_valid[i] && pipe_en && s0_valid;
 starve[i] = want_px[i] && !px_valid[i] && pipe_en && s0_valid;  // drop, never stall
@@ -383,6 +398,13 @@ frame_latch    = frame_boundary || !act_ok || !ctrl_en;   // last two terms matt
 
 // ---- FIFO prefetch ----------------------------------------------------
 mem_rd_en = (rd_ptr != wr_ptr) && (!rd_valid || rd_en);
+
+// ---- multi-pixel ------------------------------------------------------
+bx[i]  = x[i] >> log2(P);   bw[i] = w[i] >> log2(P);   // exact: alignment enforced
+win_ok = ((x[i] | w[i] | canvas_width) & (P-1)) == 0;  // else ERR.CFG
+// lanes share CONTROL, not data:
+//   per beat: v_q[k] sof_q[k] eol_q[k] eof_q[k] popf_q[i] alphaf_q[i]
+//   per lane: acc_q[k][j] lrgb_q[k][i][j] la_q[k][i][j]
 
 // ---- arithmetic -------------------------------------------------------
 div255(v)          = (t + (t>>8)) >> 8,  t = v + 128
@@ -485,25 +507,223 @@ testing what you think.
 
 ---
 
-## 9. Results
+## 9. Multi-pixel per clock
 
-Out-of-context, `xc7z045ffg900-2`, N = 4, 2048-deep layer buffers, constrained
-at **148.5 MHz** (`syn/syn.tcl`, 6.734 ns) — the 1080p60 pixel clock, so the
-numbers cover the harder of the two modes this was built for.
+Pixel rate is the reason this exists. 4K60 is 594 MHz, which no fabric of this
+class will clock; at `P_PPC = 4` it is 148.5 MHz, which this block already
+meets. The knob buys throughput with area and costs nothing in frequency,
+because the blend is **replicated per lane** rather than made deeper.
+
+### 9.1 Why one PPC for the block, not one per interface
+
+The obvious reading of "N pixels per clock per input interface" is that each
+input gets its own width. It is worth being explicit that this design does not
+do that, and why.
+
+Inside its window a layer must supply **one pixel per canvas pixel**. So a layer
+feeding a canvas that consumes `P` pixels per beat has to deliver `P` per beat
+while the window is open, whatever its own natural width is. A 1-pixel-per-beat
+source into a 4-pixel-per-beat canvas cannot sustain its window — not on
+average, and the average is not the binding constraint anyway.
+
+You can make it work with a width converter: buffer at the source's width, read
+at the canvas's. That is a standard, well-understood piece of IP that needs to
+know nothing about this block. Building `N` of them inside would cost area
+whether or not anyone used them, and would put a second rate-matching FIFO
+behind the one already there.
+
+So the rule is the same as for clocks: **convert outside, at the port that needs
+it.** The mixer has one width, and it is `P_PPC`.
+
+### 9.2 The beat-alignment constraint, and what it buys
+
+R12 constrains horizontal geometry to whole beats. That single decision is why
+almost nothing in this design had to change:
+
+| | `P_PPC = 1` | `P_PPC > 1`, beat aligned | `P_PPC > 1`, arbitrary x |
+|---|---|---|---|
+| Window test | 1 compare / layer / beat | **1 compare / layer / beat** | `P` compares / layer / beat |
+| Pixels popped per beat | 0 or 1 | **0 or `P`, all lanes together** | 0..`P`, varying |
+| Layer read side | FIFO head | **FIFO head** | barrel shifter + residue |
+| Line ends mid-beat? | no | **no** | yes — `TKEEP` starts meaning something |
+
+With the constraint, every output beat is **entirely inside or entirely outside**
+each window. So `in_win` stays one bit per layer per beat, `lay_pop` stays one
+bit per layer per beat, and the layer front end counts beats where it counted
+pixels. The blend becomes `P` copies of the same cascade sharing one set of
+control signals.
+
+That last point is the one to internalise when implementing it: **lanes share
+control, not data.** Valid, SOF, EOL, EOF, which layer is popped, and each
+layer's alpha are per beat. Only the pixel and the accumulator are per lane.
+
+```systemverilog
+// per beat                            // per lane
+v_q[k], sof_q[k], eol_q[k], eof_q[k]   acc_q[k][j]
+popf_q[i], alphaf_q[i], asrcf_q[i]     lrgb_q[k][i][j], la_q[k][i][j]
+```
+
+### 9.3 What changes, concretely
 
 | | |
 |---|---|
-| WNS | **+0.479 ns** |
-| WHS | +0.082 ns |
-| Total LUTs | 4028 |
-| FFs | 2125 |
-| RAMB36 | 8 |
-| DSP | 0 |
+| Beat width | `P_PPC * 32` on every stream |
+| Raster | counts **beats** across the canvas: `out_bx` runs `0 .. W/P - 1` |
+| Window | compared in beats: `act_bx = x >> log2(P)`, `act_bxe = (x + w) >> log2(P)` |
+| Layer FSM | counts beats per line — `cfg_w_beats`, not `cfg_width` |
+| FIFO | depth in **beats** — 2048×32 at P=1 is 256×256 at P=8, the same bits (but not the same BRAMs, see §9.5) |
+| Blend | `P` independent cascades, `N` stages each |
+| Validation | `(x \| w \| canvas_width) & (P-1)` must be zero, else `ERR.CFG` |
+| `CAPS.PPC` | reports `P`, so software can round before writing |
 
-Per layer that is ~280 LUTs and 2 BRAM36, of which the FIFO is ~220 LUTs; the
-core outside the layers is ~2000 LUTs, which is the cascade and the window
-comparisons. Zero DSPs — the blend is `div255`, a pair of adds and shifts (§5.2),
-and the `× 255` multiplies map to LUT logic at this width.
+Every pixels-to-beats conversion is a shift, which is why `P_PPC` is restricted
+to powers of two.
+
+### 9.5 The layer buffer stops being depth-limited, and it costs you
+
+The buffer holds the same number of **bits** at every `P_PPC` — one layer line
+of 2048 pixels is 65536 bits whether that is 2048×32 or 256×256. It is tempting
+to conclude the block RAM count is constant. It is not, and the measured numbers
+say so:
+
+| `P_PPC` | buffer per layer | RAMB36 total |
+|---|---|---|
+| 1 | 2048 × 32 | 8 |
+| 2 | 1024 × 64 | 8 |
+| 4 | 512 × 128 | 8 |
+| 8 | 256 × 256 | **16** |
+
+A RAMB36 is at most **72 bits wide** (SDP; 36 in TDP). Below that the memory is
+*depth*-limited and you pay for the bits. Above it the memory is *width*-limited:
+at `P_PPC = 8` each layer needs four RAMB36 side by side just to make 256 bits,
+and each of them is only a quarter full.
+
+Two consequences worth knowing before you size anything:
+
+- **Depth above the width-limited threshold is free.** At `P_PPC = 8` those four
+  RAMB36 give 512 beats whether you ask for 256 or not. Asking for 256 buys a
+  4096-pixel line buffer at no cost over a 2048-pixel one — so take it.
+- **If BRAM is tight**, that is the knob. `P_PPC = 4` is the last width that
+  fits a 72-bit port cleanly, and it is where the bits-per-BRAM efficiency
+  peaks for this geometry.
+
+### 9.4 Traps specific to this
+
+1. **Reject, don't round.** Snapping a misaligned window to a beat boundary puts
+   the picture up to `P-1` pixels from where the register says. That difference
+   is invisible in the register file and maddening on a screen.
+2. **The cross-check between the map and the build.** `CAPS.PPC` is a constant
+   in the generated map, so a build whose `P_PPC` differs reports an alignment
+   granularity it does not enforce — software then computes a layout the
+   hardware rejects. The CSR wrapper fails elaboration on the mismatch.
+3. **Beat counts vs pixel counts in the testbench.** Every "send `n` beats" and
+   "assert TLAST at index `k`" in the bench is in beats, while widths are in
+   pixels. Writing one where the other is meant does not fail loudly: at `P = 4`
+   the starve test's partial frame became two *complete* frames and the layer
+   never starved, so the test passed for the wrong reason until the re-arm
+   check caught it.
+4. **Fixed cycle waits.** A wait of `canvas_w * canvas_h` cycles covers `P`
+   times as many output frames once a beat carries `P` pixels. Scale waits by
+   the output frame in beats, or poll the status bit you actually care about.
+
+---
+
+## 10. Lifting the alignment constraint
+
+Not implemented here. This is the design if you want arbitrary `x`, and it is
+the most interesting part of a multi-pixel mixer.
+
+### 10.1 The problem
+
+Layer pixel `k` lands at canvas `x = lay_x + k`, so it belongs in lane
+`(lay_x + k) mod P` of beat `(lay_x + k) / P`. Define
+
+```
+phi = lay_x mod P
+```
+
+If `phi != 0` the layer's beats are **offset** from the output's: one output
+beat is built from the top `P - phi` pixels of one layer beat and the bottom
+`phi` of the next.
+
+### 10.2 The insight that makes it affordable
+
+`phi` is **constant for the whole frame** — it is latched with the rest of the
+geometry. So this is not a per-beat variable barrel shift; it is a fixed
+rotation whose select changes only at a frame boundary.
+
+Per layer you need:
+
+- a **residue register** holding the `P - phi` pixels left over from the
+  previous layer beat;
+- a `P`-way select per lane, choosing between the residue and the fresh beat.
+  That is a `P:1` mux of 32 bits per lane, not the `2P:1` a general shifter
+  would need.
+
+At `P = 8` that is roughly 500 LUTs per layer — real, but an order of magnitude
+less than a dynamic crossbar.
+
+### 10.3 What else stops being free
+
+- **Window test becomes per lane.** Lane `j` covers canvas `out_bx*P + j`, so
+  each lane needs its own `in_win`. `P` compares per layer per beat.
+- **Variable pop.** The number of pixels a layer owes this beat is
+  `popcount(in_win_lanes)`, which is `0..P`. The FIFO read side has to pop a
+  variable count, so it is no longer a plain FIFO head — it is the alignment
+  buffer above.
+- **Partial beats on the input.** If `lay_w` is also unconstrained, a layer line
+  ends mid-beat and the source must signal how many lanes are valid. That is
+  `TKEEP`, and the layer FSM's `geom_bad` check has to count *pixels* from
+  `TKEEP` rather than beats.
+- **Starve accounting.** Starve is now per lane, or conservatively per beat if
+  any wanted lane is missing.
+
+### 10.4 Suggested order if you do it
+
+1. Keep `lay_w` beat-aligned; relax only `lay_x`. That gets you arbitrary
+   horizontal placement without `TKEEP` anywhere.
+2. Per-lane `in_win` first, with `phi` forced to 0 — proves the window logic
+   before the alignment buffer exists.
+3. Then the residue register and the fixed-`phi` select.
+4. Only then relax `lay_w` and take on `TKEEP`.
+
+Steps 1–3 give you everything most layouts need. Step 4 is a lot of work for the
+last `P-1` pixels of width.
+
+---
+
+## 11. Results
+
+Out-of-context, `xc7z045ffg900-2`, N = 4, constrained at **148.5 MHz**
+(`syn/syn.tcl`, 6.734 ns) — the 1080p60 pixel clock, so the numbers cover the
+harder of the two modes this was built for. Layer buffers hold 2048 pixels at
+every `P_PPC`, so the beat depth falls as the width rises.
+
+```bash
+vivado -mode batch -log s.log -journal s.jou -source syn.tcl -tclargs 4   # PPC 4
+```
+
+| `P_PPC` | WNS | WHS | LUT | FF | RAMB36 | DSP |
+|---|---|---|---|---|---|---|
+| 1 | +0.282 ns | +0.057 ns | 4021 | 2055 | 8 | 0 |
+| 2 | +0.371 ns | +0.088 ns | 6434 | 2425 | 8 | 0 |
+| 4 | +0.257 ns | +0.070 ns | 11043 | 3244 | 8 | 0 |
+| 8 | +0.269 ns | +0.068 ns | 20201 | 4942 | 16 | 0 |
+
+**Timing is flat across all four.** That is the claim §9 makes — the cascade is
+replicated per lane, not made deeper, so the critical path is the same one at
+every width. Slack varies by 0.11 ns across a 4× range of area, which is
+placement noise rather than a trend.
+
+LUTs run a little under linear: ×1.6 for `P_PPC` 2, ×2.7 for 4, ×5.0 for 8. The
+sub-linearity is the shared control — one raster, one set of window compares,
+one register file, regardless of width.
+
+Zero DSPs at every width. The blend is `div255`, a pair of adds and shifts
+(§5.2), and the `× 255` multiplies map to LUT logic at this size.
+
+RAMB36 is flat to `P_PPC = 4` and then doubles; §9.5 is why, and it is not what
+you would guess from the bit count.
 
 **The mixer closes 1080p60 on its own.** That is worth stating precisely,
 because in the ZC706 design it is wrapped by `hdmi_mixer_src` — four pattern

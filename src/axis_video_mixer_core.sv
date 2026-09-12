@@ -26,6 +26,23 @@
 //           downstream loses lock if the stream pauses, so a starving source
 //           must not be allowed to take the display down with it.
 //
+//           MULTI-PIXEL PER CLOCK. A beat carries P_PPC pixels, lane 0 in the
+//           least significant bits. The raster counts BEATS across the canvas,
+//           not pixels, and every layer's window is compared in beat units.
+//
+//           That works only because horizontal geometry is constrained to whole
+//           beats -- canvas width, every layer x and every layer width must be
+//           multiples of P_PPC, and the validation below rejects anything else
+//           as ERR.CFG. With that, each output beat is entirely inside or
+//           entirely outside each window, so the window test stays one compare
+//           per layer per beat and a layer's beats line up with the output's
+//           with no realignment. The blend is then simply P_PPC copies of the
+//           same cascade sharing one set of control signals.
+//
+//           At P_PPC = 1 the constraint is vacuous, so the block behaves exactly
+//           as it did before. See doc/design.md section 10 for what relaxing it
+//           costs.
+//
 //           Geometry is double buffered. Position, size, enable and alpha are
 //           latched at a frame boundary and only there, so software can move a
 //           window whenever it likes without tearing the frame in flight.
@@ -40,9 +57,12 @@ module axis_video_mixer_core
     parameter int P_NUM_LAYERS = 4,
     parameter int P_FIFO_DEPTH = 2048,
     parameter bit P_OUT_HAS_ALPHA = 1'b1,
-    // Derived; do not override. Present as a parameter only because a port
-    // width cannot reference a localparam declared in the module body.
-    parameter int P_OUT_W = P_OUT_HAS_ALPHA ? PX_W : RGB_W
+    parameter int P_PPC = 1,
+    // Derived; do not override. Present as parameters only because a port width
+    // cannot reference a localparam declared in the module body.
+    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? PX_W : RGB_W,
+    parameter int P_OUT_W = P_PPC * P_PX_OUT_W,
+    parameter int P_BEAT_W = P_PPC * PX_W
 ) (
     input logic clk,
     input logic rst_n,
@@ -85,7 +105,7 @@ module axis_video_mixer_core
     ////////////////////////////////////////////////////////////////////////////////////////////////
     input  logic [P_NUM_LAYERS-1:0] s_axis_tvalid,
     output logic [P_NUM_LAYERS-1:0] s_axis_tready,
-    input  logic [        PX_W-1:0] s_axis_tdata [P_NUM_LAYERS],
+    input  logic [    P_BEAT_W-1:0] s_axis_tdata [P_NUM_LAYERS],
     input  logic [P_NUM_LAYERS-1:0] s_axis_tuser,
     input  logic [P_NUM_LAYERS-1:0] s_axis_tlast,
 
@@ -98,6 +118,15 @@ module axis_video_mixer_core
     output logic               m_axis_tuser,   // SOF
     output logic               m_axis_tlast    // EOL
 );
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Local parameters
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Pixels-to-beats is a shift because P_PPC is a power of two, and the mask is
+  // how alignment is tested. At P_PPC = 1 the mask is zero, so every alignment
+  // check below is trivially true and the constraint does not exist.
+  localparam int          LP_LOG2_PPC = $clog2(P_PPC);
+  localparam logic [15:0] LP_PPC_MASK = 16'(P_PPC - 1);
+
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Active configuration
   //
@@ -115,10 +144,17 @@ module axis_video_mixer_core
   logic [            15:0] act_y                                  [P_NUM_LAYERS];
   logic [            15:0] act_w_l                                [P_NUM_LAYERS];
   logic [            15:0] act_h_l                                [P_NUM_LAYERS];
-  // Window ends precomputed at the latch, so the per-pixel compare is a
+  // Window ends precomputed at the latch, so the per-beat compare is a
   // magnitude comparison rather than an adder followed by one.
-  logic [            16:0] act_xe                                 [P_NUM_LAYERS];
+  //
+  // The horizontal pair are in BEATS; the vertical pair stay in lines, because
+  // there is no vertical packing. Converting once at the latch keeps the shift
+  // out of the per-beat path.
+  logic [            15:0] act_bx                                 [P_NUM_LAYERS];
+  logic [            16:0] act_bxe                                [P_NUM_LAYERS];
   logic [            16:0] act_ye                                 [P_NUM_LAYERS];
+  logic [            15:0] act_bw_l                               [P_NUM_LAYERS];
+  logic [            15:0] act_bw;  // canvas width in beats
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Shadow validation
@@ -132,10 +168,19 @@ module axis_video_mixer_core
   logic [P_NUM_LAYERS-1:0] want_en;
   logic                    cfg_fault;
 
-  assign canvas_ok = (canvas_width != 16'd0) && (canvas_height != 16'd0);
+  // Horizontal geometry must be a whole number of beats. Rejecting rather than
+  // rounding is deliberate: silently snapping a window to a beat boundary would
+  // put the picture somewhere the register does not say, and the difference is
+  // up to P_PPC-1 pixels of unexplained offset. CAPS.PPC tells software what
+  // the granularity is so it can round before writing, and ERR.CFG says so when
+  // it did not.
+  assign canvas_ok = (canvas_width != 16'd0) && (canvas_height != 16'd0) &&
+                     ((canvas_width & LP_PPC_MASK) == 16'd0);
 
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_validate
     assign win_ok[gi] = (lay_w[gi] != 16'd0) && (lay_h[gi] != 16'd0) &&
+                        ((lay_x[gi] & LP_PPC_MASK) == 16'd0) &&
+                        ((lay_w[gi] & LP_PPC_MASK) == 16'd0) &&
                         ((17'(lay_x[gi]) + 17'(lay_w[gi])) <= 17'(canvas_width)) &&
                         ((17'(lay_y[gi]) + 17'(lay_h[gi])) <= 17'(canvas_height));
     // A layer only counts as enabled once its window is also legal.
@@ -148,7 +193,10 @@ module axis_video_mixer_core
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Output raster
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  logic [15:0] out_x, out_y;
+  // out_bx is the BEAT index across the canvas, so it runs 0 .. act_bw-1.
+  // Lane j of the beat is canvas pixel (out_bx * P_PPC + j), which is why
+  // nothing below ever needs the pixel-domain x.
+  logic [15:0] out_bx, out_y;
   logic s0_valid, s0_sof, s0_eol, s0_eof;
   logic pipe_en;
   logic frame_boundary;
@@ -158,8 +206,8 @@ module axis_video_mixer_core
   assign soft_rst = ctrl_soft_rst;
 
   assign s0_valid = ctrl_en && act_ok;
-  assign s0_sof   = (out_x == 16'd0) && (out_y == 16'd0);
-  assign s0_eol   = (out_x == act_w - 16'd1);
+  assign s0_sof   = (out_bx == 16'd0) && (out_y == 16'd0);
+  assign s0_eol   = (out_bx == act_bw - 16'd1);
   assign s0_eof   = s0_eol && (out_y == act_h - 16'd1);
 
   // Latch at the end of a frame -- and also whenever there is no frame to
@@ -176,14 +224,14 @@ module axis_video_mixer_core
 
   always_ff @(posedge clk) begin
     if (!rst_n || soft_rst || !ctrl_en) begin
-      out_x <= 16'd0;
-      out_y <= 16'd0;
+      out_bx <= 16'd0;
+      out_y  <= 16'd0;
     end else if (pipe_en && s0_valid) begin
       if (s0_eol) begin
-        out_x <= 16'd0;
-        out_y <= s0_eof ? 16'd0 : (out_y + 16'd1);
+        out_bx <= 16'd0;
+        out_y  <= s0_eof ? 16'd0 : (out_y + 16'd1);
       end else begin
-        out_x <= out_x + 16'd1;
+        out_bx <= out_bx + 16'd1;
       end
     end
   end
@@ -205,6 +253,7 @@ module axis_video_mixer_core
     if (!rst_n) begin
       act_ok <= 1'b0;
       act_w <= 16'd0;
+      act_bw <= 16'd0;
       act_h <= 16'd0;
       act_bg <= 24'd0;
       act_en <= '0;
@@ -215,7 +264,9 @@ module axis_video_mixer_core
         act_y[i]     <= 16'd0;
         act_w_l[i]   <= 16'd0;
         act_h_l[i]   <= 16'd0;
-        act_xe[i]    <= 17'd0;
+        act_bx[i]    <= 16'd0;
+        act_bw_l[i]  <= 16'd0;
+        act_bxe[i]   <= 17'd0;
         act_ye[i]    <= 17'd0;
       end
     end else if (frame_latch) begin
@@ -223,6 +274,7 @@ module axis_video_mixer_core
       // stopping the output; ERR.CFG records that it was rejected.
       if (canvas_ok) begin
         act_w  <= canvas_width;
+        act_bw <= canvas_width >> LP_LOG2_PPC;
         act_h  <= canvas_height;
         act_ok <= 1'b1;
       end
@@ -235,7 +287,12 @@ module axis_video_mixer_core
         act_y[i]     <= lay_y[i];
         act_w_l[i]   <= lay_w[i];
         act_h_l[i]   <= lay_h[i];
-        act_xe[i]    <= 17'(lay_x[i]) + 17'(lay_w[i]);
+        // Both are exact shifts: a window that is not beat aligned never gets
+        // here, because want_en is false for it and the latch below stores it
+        // disabled.
+        act_bx[i]    <= lay_x[i] >> LP_LOG2_PPC;
+        act_bw_l[i]  <= lay_w[i] >> LP_LOG2_PPC;
+        act_bxe[i]   <= 17'(lay_x[i] >> LP_LOG2_PPC) + 17'(lay_w[i] >> LP_LOG2_PPC);
         act_ye[i]    <= 17'(lay_y[i]) + 17'(lay_h[i]);
       end
     end
@@ -244,7 +301,7 @@ module axis_video_mixer_core
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Layer front ends
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  logic [PX_W-1:0] lay_px   [P_NUM_LAYERS];
+  logic [P_BEAT_W-1:0] lay_px [P_NUM_LAYERS];
   logic [P_NUM_LAYERS-1:0] lay_px_valid;
   logic [P_NUM_LAYERS-1:0] lay_pop;
   logic [P_NUM_LAYERS-1:0] lay_flush;
@@ -258,13 +315,14 @@ module axis_video_mixer_core
 
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_layer
     axis_mixer_layer #(
-        .P_FIFO_DEPTH(P_FIFO_DEPTH)
+        .P_FIFO_DEPTH(P_FIFO_DEPTH),
+        .P_PPC       (P_PPC)
     ) u_layer (
         .clk          (clk),
         .rst_n        (rst_n),
         .flush        (lay_flush[gi]),
         .enable       (act_en[gi]),
-        .cfg_width    (act_w_l[gi]),
+        .cfg_w_beats  (act_bw_l[gi]),
         .cfg_height   (act_h_l[gi]),
         .stall_limit  (stall_limit),
         .s_axis_tvalid(s_axis_tvalid[gi]),
@@ -281,8 +339,12 @@ module axis_video_mixer_core
         .level        (lay_level[gi])
     );
 
-    assign in_win[gi] = act_en[gi] && (17'(out_x) >= 17'(act_x[gi])) &&
-                        (17'(out_x) < act_xe[gi]) && (17'(out_y) >= 17'(act_y[gi])) &&
+    // One compare per layer per BEAT, not per lane. That is the whole payoff of
+    // the beat-alignment constraint: because a window starts and ends on a beat
+    // boundary, every lane of a given beat is inside or outside together, so
+    // there is nothing per-lane to decide.
+    assign in_win[gi] = act_en[gi] && (17'(out_bx) >= 17'(act_bx[gi])) &&
+                        (17'(out_bx) < act_bxe[gi]) && (17'(out_y) >= 17'(act_y[gi])) &&
                         (17'(out_y) < act_ye[gi]);
 
     // Note lay_active, not lay_armed. A layer joins the composite only at a
@@ -376,18 +438,33 @@ module axis_video_mixer_core
   // A layer that is not contributing arrives with an alpha of zero, and "over"
   // with alpha zero returns the accumulator bit-exactly. Absence needs no
   // special case anywhere in the cascade.
+  //
+  // MULTI-PIXEL. The cascade is replicated P_PPC times and the copies are
+  // completely independent -- lane j composites canvas pixel out_bx*P_PPC + j
+  // and never looks at its neighbours. Everything they share is CONTROL:
+  // valid, SOF, EOL, EOF, which layer is popped, and each layer's alpha.
+  //
+  // That is worth being explicit about, because it is what makes the area scale
+  // linearly and predictably: P_PPC copies of the arithmetic, one copy of the
+  // control. It also means the per-lane pipeline depth is unchanged, so P_PPC
+  // costs area and not frequency.
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Stage F: the FIFO read, captured raw. No arithmetic here by design.
-  logic [        PX_W-1:0] pxf_q   [P_NUM_LAYERS];
+  //
+  // pxf_q is [layer][lane]: one beat per layer, unpacked into lanes here so
+  // that nothing downstream has to do bit slicing.
+  logic [        PX_W-1:0] pxf_q   [P_NUM_LAYERS] [P_PPC];
   logic [P_NUM_LAYERS-1:0] popf_q;
   logic [             7:0] alphaf_q[P_NUM_LAYERS];
   logic [P_NUM_LAYERS-1:0] asrcf_q;
   logic [       RGB_W-1:0] bgf_q;
   logic vf_q, soff_q, eolf_q, eoff_q;
 
-  logic [RGB_W-1:0] acc_q [P_NUM_LAYERS+1];
-  logic [RGB_W-1:0] lrgb_q[P_NUM_LAYERS+1] [P_NUM_LAYERS];
-  logic [      7:0] la_q  [P_NUM_LAYERS+1] [P_NUM_LAYERS];
+  // [stage][lane] for the accumulator, [stage][layer][lane] for the operands.
+  logic [RGB_W-1:0] acc_q [P_NUM_LAYERS+1] [P_PPC];
+  logic [RGB_W-1:0] lrgb_q[P_NUM_LAYERS+1] [P_NUM_LAYERS] [P_PPC];
+  logic [      7:0] la_q  [P_NUM_LAYERS+1] [P_NUM_LAYERS] [P_PPC];
+  // Control is per stage only -- every lane of a beat shares it.
   logic             v_q   [P_NUM_LAYERS+1];
   logic             sof_q [P_NUM_LAYERS+1];
   logic             eol_q [P_NUM_LAYERS+1];
@@ -411,8 +488,10 @@ module axis_video_mixer_core
       popf_q <= lay_pop;
       asrcf_q <= act_asrc;
       for (int i = 0; i < P_NUM_LAYERS; i++) begin
-        pxf_q[i]    <= lay_px[i];
         alphaf_q[i] <= act_alpha[i];
+        for (int j = 0; j < P_PPC; j++) begin
+          pxf_q[i][j] <= lay_px[i][j*PX_W+:PX_W];
+        end
       end
     end
   end
@@ -426,10 +505,17 @@ module axis_video_mixer_core
       sof_q[0] <= soff_q;
       eol_q[0] <= eolf_q;
       eof_q[0] <= eoff_q;
-      acc_q[0] <= bgf_q;
+      // Every lane starts from the same background: it is a canvas-wide colour,
+      // not a per-pixel one.
+      for (int j = 0; j < P_PPC; j++) acc_q[0][j] <= bgf_q;
       for (int i = 0; i < P_NUM_LAYERS; i++) begin
-        lrgb_q[0][i] <= px_rgb(pxf_q[i]);
-        la_q[0][i]   <= popf_q[i] ? effective_alpha(px_a(pxf_q[i]), alphaf_q[i], asrcf_q[i]) : 8'd0;
+        for (int j = 0; j < P_PPC; j++) begin
+          lrgb_q[0][i][j] <= px_rgb(pxf_q[i][j]);
+          // popf_q is per LAYER, not per lane -- a beat-aligned window pops all
+          // P_PPC lanes of a layer together or none of them.
+          la_q[0][i][j] <= popf_q[i] ?
+              effective_alpha(px_a(pxf_q[i][j]), alphaf_q[i], asrcf_q[i]) : 8'd0;
+        end
       end
     end
   end
@@ -443,12 +529,17 @@ module axis_video_mixer_core
         sof_q[gk+1] <= sof_q[gk];
         eol_q[gk+1] <= eol_q[gk];
         eof_q[gk+1] <= eof_q[gk];
-        acc_q[gk+1] <= blend_rgb(lrgb_q[gk][gk], acc_q[gk], la_q[gk][gk]);
+        // P_PPC independent blends, one per lane, all of layer gk.
+        for (int j = 0; j < P_PPC; j++) begin
+          acc_q[gk+1][j] <= blend_rgb(lrgb_q[gk][gk][j], acc_q[gk][j], la_q[gk][gk][j]);
+        end
         // Only entries at or above gk are still needed downstream; the rest
         // form a chain to nowhere and are trimmed during synthesis.
-        for (int j = 0; j < P_NUM_LAYERS; j++) begin
-          lrgb_q[gk+1][j] <= lrgb_q[gk][j];
-          la_q[gk+1][j]   <= la_q[gk][j];
+        for (int i = 0; i < P_NUM_LAYERS; i++) begin
+          for (int j = 0; j < P_PPC; j++) begin
+            lrgb_q[gk+1][i][j] <= lrgb_q[gk][i][j];
+            la_q[gk+1][i][j]   <= la_q[gk][i][j];
+          end
         end
       end
     end
@@ -461,12 +552,15 @@ module axis_video_mixer_core
   assign m_axis_tuser  = sof_q[P_NUM_LAYERS];
   assign m_axis_tlast  = eol_q[P_NUM_LAYERS];
 
-  if (P_OUT_HAS_ALPHA) begin : g_out_rgba
-    // Everything below the top layer has been composited in, so the result is
-    // opaque by construction.
-    assign m_axis_tdata = {acc_q[P_NUM_LAYERS], OPAQUE};
-  end else begin : g_out_rgb
-    assign m_axis_tdata = acc_q[P_NUM_LAYERS];
+  // Lane 0 in the least significant bits, matching the input convention.
+  for (genvar gj = 0; gj < P_PPC; gj++) begin : g_out_lane
+    if (P_OUT_HAS_ALPHA) begin : g_rgba
+      // Everything below the top layer has been composited in, so the result is
+      // opaque by construction.
+      assign m_axis_tdata[gj*P_PX_OUT_W+:P_PX_OUT_W] = {acc_q[P_NUM_LAYERS][gj], OPAQUE};
+    end else begin : g_rgb
+      assign m_axis_tdata[gj*P_PX_OUT_W+:P_PX_OUT_W] = acc_q[P_NUM_LAYERS][gj];
+    end
   end
 
   logic out_beat;
@@ -554,12 +648,12 @@ module axis_video_mixer_core
       // running. If the raster ever stops advancing while enabled and
       // unstalled, the design has failed at its primary job. A 1x1 canvas is
       // excluded because its counters legitimately never change.
-      if (chk_raster_armed && (out_x == chk_prev_x) && (out_y == chk_prev_y)) begin
+      if (chk_raster_armed && (out_bx == chk_prev_x) && (out_y == chk_prev_y)) begin
         $error(
             "RTL-ASSERT axis_video_mixer_core: raster stalled while enabled and not backpressured");
       end
       chk_raster_armed <= s0_valid && pipe_en && ((act_w > 16'd1) || (act_h > 16'd1));
-      chk_prev_x       <= out_x;
+      chk_prev_x       <= out_bx;
       chk_prev_y       <= out_y;
 
       // TDATA, TUSER and TLAST must hold, and TVALID must stay high, while a

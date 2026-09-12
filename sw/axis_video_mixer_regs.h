@@ -45,12 +45,13 @@ typedef struct {
 
 // CAPS - Build-time capabilities, so software can size its own layer loops from the hardware it is actually talking to instead of from a compile-time assumption. These are constants baked into the map by gen_regs.py; axis_video_mixer.sv asserts at elaboration that they match the RTL parameters, so a map and a build that disagree fail loudly rather than misreporting.
 #define MIXER_CAPS_ADDR 0x4
-#define MIXER_CAPS_RESET 0x10b04
+#define MIXER_CAPS_RESET 0x1010b04
 typedef struct {
     uint32_t NUM_LAYERS : 8; // Number of layer input streams this build instantiates.
-    uint32_t FIFO_DEPTH_LOG2 : 8; // Per-layer input FIFO depth, as a power of two. A layer wider than 2**this cannot be guaranteed free of underflow.
-    uint32_t OUT_HAS_ALPHA : 1; // 1 if the output stream carries RGBA8 (32-bit TDATA), 0 if it carries RGB8 (24-bit TDATA) with alpha discarded after blending.
-    uint32_t : 15; // reserved
+    uint32_t FIFO_DEPTH_LOG2 : 8; // Per-layer input FIFO depth in BEATS, as a power of two. A layer wider than PPC * 2**this cannot be guaranteed free of underflow, because a window at x = 0 gets no head start within the output line.
+    uint32_t OUT_HAS_ALPHA : 1; // 1 if the output stream carries RGBA8 per pixel, 0 if it carries RGB8 with alpha discarded after blending.
+    uint32_t : 7; // reserved
+    uint32_t PPC : 8; // Pixels per beat on every stream, 1, 2, 4 or 8. Also the horizontal alignment granularity: CANVAS.WIDTH, Ln_POS.X and Ln_SIZE.WIDTH must all be multiples of this, and a write that is not is rejected with ERR.CFG rather than rounded. Read it before computing a layout.
 } mixer_caps_t;
 
 // CAPS.NUM_LAYERS - Number of layer input streams this build instantiates.
@@ -59,17 +60,23 @@ typedef struct {
 #define MIXER_CAPS_NUM_LAYERS_MASK 0xff
 #define MIXER_CAPS_NUM_LAYERS_RESET 0x4
 
-// CAPS.FIFO_DEPTH_LOG2 - Per-layer input FIFO depth, as a power of two. A layer wider than 2**this cannot be guaranteed free of underflow.
+// CAPS.FIFO_DEPTH_LOG2 - Per-layer input FIFO depth in BEATS, as a power of two. A layer wider than PPC * 2**this cannot be guaranteed free of underflow, because a window at x = 0 gets no head start within the output line.
 #define MIXER_CAPS_FIFO_DEPTH_LOG2_WIDTH 8
 #define MIXER_CAPS_FIFO_DEPTH_LOG2_LSB 8
 #define MIXER_CAPS_FIFO_DEPTH_LOG2_MASK 0xff00
 #define MIXER_CAPS_FIFO_DEPTH_LOG2_RESET 0xb
 
-// CAPS.OUT_HAS_ALPHA - 1 if the output stream carries RGBA8 (32-bit TDATA), 0 if it carries RGB8 (24-bit TDATA) with alpha discarded after blending.
+// CAPS.OUT_HAS_ALPHA - 1 if the output stream carries RGBA8 per pixel, 0 if it carries RGB8 with alpha discarded after blending.
 #define MIXER_CAPS_OUT_HAS_ALPHA_WIDTH 1
 #define MIXER_CAPS_OUT_HAS_ALPHA_LSB 16
 #define MIXER_CAPS_OUT_HAS_ALPHA_MASK 0x10000
 #define MIXER_CAPS_OUT_HAS_ALPHA_RESET 0x1
+
+// CAPS.PPC - Pixels per beat on every stream, 1, 2, 4 or 8. Also the horizontal alignment granularity: CANVAS.WIDTH, Ln_POS.X and Ln_SIZE.WIDTH must all be multiples of this, and a write that is not is rejected with ERR.CFG rather than rounded. Read it before computing a layout.
+#define MIXER_CAPS_PPC_WIDTH 8
+#define MIXER_CAPS_PPC_LSB 24
+#define MIXER_CAPS_PPC_MASK 0xff000000
+#define MIXER_CAPS_PPC_RESET 0x1
 
 // SCRATCH - Read/write scratchpad with no hardware effect. Exists so a write-then-read test can prove the bus end to end without disturbing the picture.
 #define MIXER_SCRATCH_ADDR 0x8

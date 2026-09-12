@@ -19,9 +19,20 @@
 //
 //           Streams. All of them, in and out, use the Xilinx video AXI4-Stream
 //           conventions already used elsewhere in this pipeline:
-//               TUSER = SOF, on the first pixel of a frame
-//               TLAST = EOL, on the last pixel of every line
-//               TDATA = {R, G, B, A} for inputs, R in the most significant byte
+//               TUSER = SOF, on the first BEAT of a frame
+//               TLAST = EOL, on the last BEAT of every line
+//               TDATA = P_PPC pixels, lane 0 in the least significant bits,
+//                       each pixel {R, G, B, A} with R in its top byte
+//
+//           P_PPC applies to every port -- all N inputs and the output. It is
+//           not per interface, and the reason is arithmetic rather than taste:
+//           inside its window a layer must supply one pixel per canvas pixel,
+//           so a layer feeding a P-pixel-per-beat canvas has to deliver P per
+//           beat. A source running at a different width belongs behind an
+//           AXI4-Stream width converter, exactly as a source on another clock
+//           belongs behind a clock converter. Both are standard IP that need
+//           know nothing about this block, and building N of either inside
+//           would cost area whether or not anyone used them.
 //
 //           Clocking. Single domain: every input stream, the output stream and
 //           the AXI4-Lite port all run on clk. Feeding a source from another
@@ -43,9 +54,21 @@ module axis_video_mixer
     //    be cascaded. 0: 24-bit RGB, which drops straight into a video output
     //    stage without an adapter.
     parameter bit P_OUT_HAS_ALPHA = 1'b1,
+    // Pixels per beat on every stream. 1, 2, 4 or 8.
+    //
+    // This is the knob for pixel rates above the achievable fclk: 4K60 is a
+    // 594 MHz pixel rate, which is 148.5 MHz at P_PPC = 4. It costs area
+    // roughly linearly and frequency not at all, because the blend is
+    // replicated per lane rather than made deeper.
+    //
+    // Horizontal geometry must be a whole number of beats -- see the register
+    // map's CAPS.PPC and ERR.CFG. At 1 that constraint is vacuous.
+    parameter int P_PPC = 1,
     parameter int P_AXIL_ADDR_W = 12,
     // Derived; do not override.
-    parameter int P_OUT_W = P_OUT_HAS_ALPHA ? PX_W : RGB_W
+    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? PX_W : RGB_W,
+    parameter int P_OUT_W = P_PPC * P_PX_OUT_W,
+    parameter int P_BEAT_W = P_PPC * PX_W
 ) (
     input logic clk,
     input logic rst_n,
@@ -75,13 +98,13 @@ module axis_video_mixer
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Layer input streams, flattened. Layer i occupies bit i of the handshake
-    // vectors and TDATA[(i+1)*32-1 : i*32].
+    // vectors and TDATA[(i+1)*P_BEAT_W-1 : i*P_BEAT_W].
     ////////////////////////////////////////////////////////////////////////////////////////////////
-    input  logic [     P_NUM_LAYERS-1:0] s_axis_tvalid,
-    output logic [     P_NUM_LAYERS-1:0] s_axis_tready,
-    input  logic [P_NUM_LAYERS*PX_W-1:0] s_axis_tdata,
-    input  logic [     P_NUM_LAYERS-1:0] s_axis_tuser,
-    input  logic [     P_NUM_LAYERS-1:0] s_axis_tlast,
+    input  logic [         P_NUM_LAYERS-1:0] s_axis_tvalid,
+    output logic [         P_NUM_LAYERS-1:0] s_axis_tready,
+    input  logic [P_NUM_LAYERS*P_BEAT_W-1:0] s_axis_tdata,
+    input  logic [         P_NUM_LAYERS-1:0] s_axis_tuser,
+    input  logic [         P_NUM_LAYERS-1:0] s_axis_tlast,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Composited output stream
@@ -130,10 +153,10 @@ module axis_video_mixer
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Unflatten the input streams
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  logic [        PX_W-1:0] s_axis_tdata_arr[P_NUM_LAYERS];
+  logic [    P_BEAT_W-1:0] s_axis_tdata_arr[P_NUM_LAYERS];
 
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_unflatten
-    assign s_axis_tdata_arr[gi] = s_axis_tdata[gi*PX_W+:PX_W];
+    assign s_axis_tdata_arr[gi] = s_axis_tdata[gi*P_BEAT_W+:P_BEAT_W];
   end
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -141,6 +164,7 @@ module axis_video_mixer
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   axis_video_mixer_csr #(
       .P_NUM_LAYERS(P_NUM_LAYERS),
+      .P_PPC       (P_PPC),
       .P_ADDR_W    (P_AXIL_ADDR_W)
   ) u_csr (
       .clk  (clk),
@@ -205,7 +229,8 @@ module axis_video_mixer
   axis_video_mixer_core #(
       .P_NUM_LAYERS   (P_NUM_LAYERS),
       .P_FIFO_DEPTH   (P_FIFO_DEPTH),
-      .P_OUT_HAS_ALPHA(P_OUT_HAS_ALPHA)
+      .P_OUT_HAS_ALPHA(P_OUT_HAS_ALPHA),
+      .P_PPC          (P_PPC)
   ) u_core (
       .clk  (clk),
       .rst_n(rst_n),
@@ -263,6 +288,16 @@ module axis_video_mixer
     end
     if (P_NUM_LAYERS < 1 || P_NUM_LAYERS > 16) begin
       $fatal(1, "axis_video_mixer: P_NUM_LAYERS=%0d out of range 1..16", P_NUM_LAYERS);
+    end
+    if (!ppc_legal(P_PPC)) begin
+      $fatal(1, "axis_video_mixer: P_PPC=%0d must be 1, 2, 4 or 8", P_PPC);
+    end
+    // The buffer is measured in beats now, so the depth needed for a given
+    // pixel capacity falls with P_PPC. Getting this backwards is a starve on
+    // every line, so it is worth failing the build over.
+    if (P_FIFO_DEPTH < 2) begin
+      $fatal(1, "axis_video_mixer: P_FIFO_DEPTH=%0d is a beat count and must cover one layer line",
+             P_FIFO_DEPTH);
     end
   end
 

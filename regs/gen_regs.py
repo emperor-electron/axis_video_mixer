@@ -68,7 +68,7 @@ def reg(name, description, address, bitfields):
     }
 
 
-def global_regs(num_layers, fifo_depth_log2, out_has_alpha):
+def global_regs(num_layers, fifo_depth_log2, out_has_alpha, ppc):
     """The registers that exist once, regardless of layer count."""
     return [
         reg(
@@ -96,12 +96,18 @@ def global_regs(num_layers, fifo_depth_log2, out_has_alpha):
             [
                 bf("NUM_LAYERS", "Number of layer input streams this build instantiates.",
                    0, 8, "ro", "f", num_layers),
-                bf("FIFO_DEPTH_LOG2", "Per-layer input FIFO depth, as a power of two. A layer "
-                   "wider than 2**this cannot be guaranteed free of underflow.",
+                bf("FIFO_DEPTH_LOG2", "Per-layer input FIFO depth in BEATS, as a power of two. "
+                   "A layer wider than PPC * 2**this cannot be guaranteed free of underflow, "
+                   "because a window at x = 0 gets no head start within the output line.",
                    8, 8, "ro", "f", fifo_depth_log2),
-                bf("OUT_HAS_ALPHA", "1 if the output stream carries RGBA8 (32-bit TDATA), "
-                   "0 if it carries RGB8 (24-bit TDATA) with alpha discarded after blending.",
+                bf("OUT_HAS_ALPHA", "1 if the output stream carries RGBA8 per pixel, "
+                   "0 if it carries RGB8 with alpha discarded after blending.",
                    16, 1, "ro", "f", 1 if out_has_alpha else 0),
+                bf("PPC", "Pixels per beat on every stream, 1, 2, 4 or 8. Also the horizontal "
+                   "alignment granularity: CANVAS.WIDTH, Ln_POS.X and Ln_SIZE.WIDTH must all be "
+                   "multiples of this, and a write that is not is rejected with ERR.CFG rather "
+                   "than rounded. Read it before computing a layout.",
+                   24, 8, "ro", "f", ppc),
             ],
         ),
         reg(
@@ -309,8 +315,8 @@ def layer_regs(index):
     ]
 
 
-def build(num_layers, fifo_depth_log2, out_has_alpha):
-    regmap = global_regs(num_layers, fifo_depth_log2, out_has_alpha)
+def build(num_layers, fifo_depth_log2, out_has_alpha, ppc):
+    regmap = global_regs(num_layers, fifo_depth_log2, out_has_alpha, ppc)
     for i in range(num_layers):
         regmap.extend(layer_regs(i))
     return {"regmap": regmap}
@@ -336,6 +342,7 @@ CSR_WRAPPER_HEADER = '''`timescale 1ns / 1ps
 
 module axis_video_mixer_csr #(
     parameter int P_NUM_LAYERS = %d,
+    parameter int P_PPC = %d,
     parameter int P_ADDR_W     = 12
 ) (
     input logic clk,
@@ -419,6 +426,13 @@ module axis_video_mixer_csr #(
       $fatal(1, "axis_video_mixer_csr: P_NUM_LAYERS=%%0d but the register map was generated for %d",
              P_NUM_LAYERS);
     end
+    // CAPS.PPC is a constant in the generated map. A build whose P_PPC differs
+    // would report an alignment granularity it does not enforce, and software
+    // would compute a layout the hardware then rejects.
+    if (P_PPC != %d) begin
+      $fatal(1, "axis_video_mixer_csr: P_PPC=%%0d but the register map was generated for %d",
+             P_PPC);
+    end
   end
 
   // ERR readback, needed to build irq and STATUS.ERR_ANY.
@@ -484,10 +498,11 @@ module axis_video_mixer_csr #(
 '''
 
 
-def emit_csr_wrapper(num_layers, path):
+def emit_csr_wrapper(num_layers, ppc, path):
     """Emit the array adapter around corsair's flat register block."""
     o = []
-    o.append(CSR_WRAPPER_HEADER % (num_layers, 4, num_layers, num_layers, num_layers))
+    o.append(CSR_WRAPPER_HEADER
+             % (num_layers, 4, num_layers, ppc, num_layers, num_layers, ppc, ppc))
 
     o.append("  ////////////////////////////////////////////////////////////////////"
              "////////////////////////////////\n")
@@ -566,20 +581,24 @@ def main():
                     help="per-layer FIFO depth as a power of two (default 11, 2048 pixels)")
     ap.add_argument("--rgb-out", action="store_true",
                     help="output stream is 24-bit RGB8 rather than 32-bit RGBA8")
+    ap.add_argument("-p", "--ppc", type=int, default=1,
+                    help="pixels per clock on every stream: 1, 2, 4 or 8 (default 1)")
     ap.add_argument("-o", "--output", default="regs.json", help="output path")
     ap.add_argument("-w", "--wrapper", default="../src/generated/axis_video_mixer_csr.sv",
                     help="path for the generated array adapter")
     args = ap.parse_args()
 
+    if args.ppc not in (1, 2, 4, 8):
+        sys.exit("gen_regs: --ppc must be 1, 2, 4 or 8, got %d" % args.ppc)
     if not 1 <= args.num_layers <= 16:
         sys.exit("layer count must be between 1 and 16 (ERR_LAYER is 16 bits wide)")
 
-    doc = build(args.num_layers, args.fifo_depth_log2, not args.rgb_out)
+    doc = build(args.num_layers, args.fifo_depth_log2, not args.rgb_out, args.ppc)
     with open(args.output, "w") as f:
         json.dump(doc, f, indent=4)
         f.write("\n")
 
-    emit_csr_wrapper(args.num_layers, args.wrapper)
+    emit_csr_wrapper(args.num_layers, args.ppc, args.wrapper)
 
     last = doc["regmap"][-1]["address"]
     print("wrote %s: %d layers, %d registers, highest address 0x%02X"
