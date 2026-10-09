@@ -23,6 +23,12 @@ Each stream is five named ports — `s_axis3_tvalid`, `s_axis3_tready`,
 bus, so a block design or an IP-XACT package sees eight separate AXI4-Stream
 interfaces and infers them from the names with no manual mapping.
 
+Forty ports is forty chances to transpose one. §11.5 to §11.9 of
+[`doc/design.md`](doc/design.md) are the practical half of that: how to write
+the port list and the gather so a swap is visible, the mirror image of the
+problem in the parent and the testbench, the lint a partly-wired build
+produces, and how to prove the wiring rather than hope.
+
 ## The idea
 
 The output is the master, not the inputs. A raster counter free-runs across the

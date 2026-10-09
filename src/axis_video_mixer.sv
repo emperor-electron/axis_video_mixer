@@ -244,6 +244,14 @@ module axis_video_mixer
   // wants one port per signal. This is the whole of the translation, and it is
   // one assign per port rather than a generate loop because a port name is not
   // something a genvar can build.
+  //
+  // One assign per port, grouped by stream, five lines each, and deliberately
+  // not a concatenation. `{s_axis7_tvalid, ..., s_axis0_tvalid}` is one line
+  // instead of eight, but it reads most-significant first -- which is to say
+  // in reverse index order -- and the index it is assigning never appears on
+  // the page at all. Written this way the index and the port name sit next to
+  // each other on every line, so a transposition is something you can see
+  // rather than something you have to reconstruct. See doc/design.md 11.6.
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   logic [  MAX_LAYERS-1:0] in_tvalid;
   logic [  MAX_LAYERS-1:0] in_tready;
@@ -251,55 +259,52 @@ module axis_video_mixer
   logic [  MAX_LAYERS-1:0] in_tuser;
   logic [  MAX_LAYERS-1:0] in_tlast;
 
-  assign in_tvalid = {
-    s_axis7_tvalid,
-    s_axis6_tvalid,
-    s_axis5_tvalid,
-    s_axis4_tvalid,
-    s_axis3_tvalid,
-    s_axis2_tvalid,
-    s_axis1_tvalid,
-    s_axis0_tvalid
-  };
-
-  assign in_tuser = {
-    s_axis7_tuser,
-    s_axis6_tuser,
-    s_axis5_tuser,
-    s_axis4_tuser,
-    s_axis3_tuser,
-    s_axis2_tuser,
-    s_axis1_tuser,
-    s_axis0_tuser
-  };
-
-  assign in_tlast = {
-    s_axis7_tlast,
-    s_axis6_tlast,
-    s_axis5_tlast,
-    s_axis4_tlast,
-    s_axis3_tlast,
-    s_axis2_tlast,
-    s_axis1_tlast,
-    s_axis0_tlast
-  };
-
-  assign in_tdata[0] = s_axis0_tdata;
-  assign in_tdata[1] = s_axis1_tdata;
-  assign in_tdata[2] = s_axis2_tdata;
-  assign in_tdata[3] = s_axis3_tdata;
-  assign in_tdata[4] = s_axis4_tdata;
-  assign in_tdata[5] = s_axis5_tdata;
-  assign in_tdata[6] = s_axis6_tdata;
-  assign in_tdata[7] = s_axis7_tdata;
-
+  assign in_tvalid[0]   = s_axis0_tvalid;
+  assign in_tdata[0]    = s_axis0_tdata;
+  assign in_tuser[0]    = s_axis0_tuser;
+  assign in_tlast[0]    = s_axis0_tlast;
   assign s_axis0_tready = in_tready[0];
+
+  assign in_tvalid[1]   = s_axis1_tvalid;
+  assign in_tdata[1]    = s_axis1_tdata;
+  assign in_tuser[1]    = s_axis1_tuser;
+  assign in_tlast[1]    = s_axis1_tlast;
   assign s_axis1_tready = in_tready[1];
+
+  assign in_tvalid[2]   = s_axis2_tvalid;
+  assign in_tdata[2]    = s_axis2_tdata;
+  assign in_tuser[2]    = s_axis2_tuser;
+  assign in_tlast[2]    = s_axis2_tlast;
   assign s_axis2_tready = in_tready[2];
+
+  assign in_tvalid[3]   = s_axis3_tvalid;
+  assign in_tdata[3]    = s_axis3_tdata;
+  assign in_tuser[3]    = s_axis3_tuser;
+  assign in_tlast[3]    = s_axis3_tlast;
   assign s_axis3_tready = in_tready[3];
+
+  assign in_tvalid[4]   = s_axis4_tvalid;
+  assign in_tdata[4]    = s_axis4_tdata;
+  assign in_tuser[4]    = s_axis4_tuser;
+  assign in_tlast[4]    = s_axis4_tlast;
   assign s_axis4_tready = in_tready[4];
+
+  assign in_tvalid[5]   = s_axis5_tvalid;
+  assign in_tdata[5]    = s_axis5_tdata;
+  assign in_tuser[5]    = s_axis5_tuser;
+  assign in_tlast[5]    = s_axis5_tlast;
   assign s_axis5_tready = in_tready[5];
+
+  assign in_tvalid[6]   = s_axis6_tvalid;
+  assign in_tdata[6]    = s_axis6_tdata;
+  assign in_tuser[6]    = s_axis6_tuser;
+  assign in_tlast[6]    = s_axis6_tlast;
   assign s_axis6_tready = in_tready[6];
+
+  assign in_tvalid[7]   = s_axis7_tvalid;
+  assign in_tdata[7]    = s_axis7_tdata;
+  assign in_tuser[7]    = s_axis7_tuser;
+  assign in_tlast[7]    = s_axis7_tlast;
   assign s_axis7_tready = in_tready[7];
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -326,6 +331,16 @@ module axis_video_mixer
 
   for (genvar gi = P_NUM_LAYERS; gi < MAX_LAYERS; gi++) begin : g_stream_unused
     assign in_tready[gi] = 1'b0;
+
+    // Read once, into nothing. The gather above is unconditional, so a build
+    // with fewer than MAX_LAYERS streams drives these and then never looks at
+    // them -- which every linter reports, correctly, as bits that are not
+    // used. Naming the sink `unused_*` is the convention that says the
+    // discard is deliberate; without it the warnings are noise that a
+    // clean-lint policy has to waive in bulk, and bulk waivers hide the real
+    // one. See doc/design.md 11.8.
+    logic unused_stream;
+    assign unused_stream = ^{in_tvalid[gi], in_tuser[gi], in_tlast[gi], in_tdata[gi]};
   end
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////

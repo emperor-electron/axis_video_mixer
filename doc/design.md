@@ -95,7 +95,8 @@ Tab 1 of the drawio file. Three pieces:
 
 `axis_video_mixer` itself is wiring and nothing else: it gathers the eight sets
 of named stream ports into the arrays the datapath indexes, and connects the
-two blocks above. §11.
+two blocks above. §11 — and §11.5 onwards if you are writing that fan-out
+yourself rather than reading this one.
 
 Latency SOF-in to SOF-out is `2 + N` cycles: stage F, stage A, then one blend
 stage per layer.
@@ -780,6 +781,13 @@ last `P-1` pixels of width.
 
 ## 11. Eight streams, named ports
 
+§11.1 to §11.4 are why the ports look like this. **§11.5 to §11.9 are how to
+deal with them**, and they are the part to read if you are writing the fan-out
+rather than reading it — the port list, the gather, the mirror image of both in
+the parent and the bench, the lint you will get, and how to know the wiring is
+right. Forty ports is not hard, it is just forty chances to be wrong once, and
+all five sections are about making the one mistake visible.
+
 ### 11.1 Why one port per signal
 
 Every signal of every input stream is its own named port: `s_axis0_tvalid`,
@@ -812,7 +820,7 @@ in the file that is not an instantiation.
 The ports for all eight exist regardless, because a port list cannot be
 generated — there is no construct that conditionally declares a port, and
 emitting the module from a script to get one would make the RTL unreadable for
-a gain of some wires.
+a gain of some wires. §11.5 is what to do about that instead.
 
 An unimplemented stream has its inputs ignored and its `TREADY` held **low**.
 Low rather than high, deliberately: high would consume beats and discard them,
@@ -875,6 +883,218 @@ Writable, readable, connected to nothing. The alternative is a map per layer
 count, and with it a C header per layer count, a copy of the register
 documentation per layer count, and an elaboration-time check whose whole job is
 to catch the moment they stop matching.
+
+### 11.5 Writing the port list
+
+The repetition is unavoidable and the only question is where it lands. There is
+no construct that declares a port in a loop: a genvar cannot build an
+identifier, `generate` cannot appear in a port list, and a parameterised number
+of ports is not a thing SystemVerilog has. Forty port declarations is the
+floor, and every approach that looks like it avoids them is really moving them
+somewhere worse.
+
+Four things make the forty cheap to review, which is the actual goal — a port
+list nobody can check is the problem, not a port list that is long.
+
+**Group by stream, not by signal.** Five lines per stream, blank line between:
+
+```systemverilog
+input  logic                s_axis3_tvalid,
+output logic                s_axis3_tready,
+input  logic [P_BEAT_W-1:0] s_axis3_tdata,
+input  logic                s_axis3_tuser,
+input  logic                s_axis3_tlast,
+```
+
+Grouping by signal instead — all eight `tvalid`, then all eight `tdata` — makes
+the widths line up prettily and is strictly worse. A missing `s_axis5_tuser` is
+invisible in a column of eight near-identical lines and obvious as a
+four-line stanza where its neighbours have five. It is also the wrong order for
+every tool and every human that thinks in interfaces.
+
+**Keep the five in the same order in every stanza.** Then the whole list is one
+pattern repeated, and a reviewer checks the pattern once and the indices
+eight times, rather than reading forty lines.
+
+**Generate the text, then check it in.** There is nothing wrong with writing
+the stanzas from a script — this file's were — as long as what lands in the
+repository is the expanded SystemVerilog. A module whose port list exists only
+as a template is a module nobody can read, grep, or diff, and the generator
+becomes a second source of truth that drifts.
+
+**Do not decorate the names.** Interface inference in an IP packager keys on a
+common prefix per interface plus the standard AXI4-Stream suffixes:
+`s_axis3_` + `tvalid`/`tready`/`tdata`/`tuser`/`tlast`. Add an `_i`/`_o`
+direction suffix, abbreviate `tvalid` to `tv`, change case between stanzas, or
+put the index at the end (`s_axis_tvalid3`) and inference stops recognising
+anything — at which point the integrator maps forty ports by hand in the GUI,
+once per revision of the IP. The naming is the feature; §11.1 is why.
+
+### 11.6 The gather, and making a transposition visible
+
+Named ports outside, arrays inside, in exactly one place. Nothing downstream of
+the gather ever names a port again — the datapath takes `in_tdata[gi]` — so the
+whole of the fan-out risk is forty lines you can put a finger on.
+
+Write it as one assign per port, grouped by stream:
+
+```systemverilog
+assign in_tvalid[3]   = s_axis3_tvalid;
+assign in_tdata[3]    = s_axis3_tdata;
+assign in_tuser[3]    = s_axis3_tuser;
+assign in_tlast[3]    = s_axis3_tlast;
+assign s_axis3_tready = in_tready[3];
+```
+
+**Not as a concatenation.** This is the one real decision in the gather and it
+went the other way first:
+
+```systemverilog
+// Don't.
+assign in_tvalid = {s_axis7_tvalid, s_axis6_tvalid, ..., s_axis0_tvalid};
+```
+
+One line instead of eight, and three defects. It reads most-significant first,
+which is reverse index order, so the eye has to count backwards from 7 to check
+it. The index being assigned never appears on the page at all — the mapping is
+implied by position, which is precisely the information a reviewer cannot
+verify by looking. And it does not work for `TDATA` at all, because that is an
+unpacked array and a concatenation cannot target one, so the file ends up with
+two different styles and the reader has to hold both.
+
+Per-element, the index and the port name sit next to each other on every line.
+A transposition is then something you see rather than something you
+reconstruct, and `s_axis3_tvalid` driving `in_tvalid[2]` is as visible as a
+typo.
+
+**The direction flip is the one to watch.** Four of the five lines assign *into*
+the array and the fifth assigns *out* of it, because `TREADY` is the only output
+in the set. Keeping it last in every stanza, with the port on the left, makes
+the odd one out look odd. Writing it in the middle, or writing the four inputs
+with the port on the left, is how a gather ends up with `TREADY` connected to
+the wrong stream — which is the worst of these bugs, because the data still
+arrives and only the backpressure is crossed, so one source stalls while a
+different one's FIFO overflows.
+
+### 11.7 The same problem, mirrored, in the parent and the bench
+
+Whoever instantiates the mixer has the fan-out in reverse, and the same
+constraint: a named port connection cannot be built by a genvar either. Three
+ways out, in order of how much they actually help.
+
+**`.*`, if the parent's nets are named like the ports.** If the enclosing module
+declares `s_axis3_tdata` and friends, the instantiation is:
+
+```systemverilog
+axis_video_mixer #(...) u_mixer (.*);
+```
+
+No connection list at all — forty lines gone, and checked: it elaborates
+clean. This is the right answer when the parent is a thin wrapper, an IP
+integration shim, or anything whose job is to pass the streams through, because
+the parent's port list is then the only list and `.*` cannot transpose
+anything. It is the wrong answer when the parent's nets are named for what they
+*are* locally, because renaming them to match the mixer makes the parent
+unreadable to buy tidiness in one instantiation.
+
+**An array in the parent, forty named connections.** What the testbench does:
+hold the streams in unpacked arrays, connect `s_axis3_tdata` to `s_tdata[3]`,
+and generate everything upstream of that in a loop. The list is mechanical and
+reviewable by the §11.6 rule — index next to name on every line.
+
+**Interface ports.** An `interface` array would make this one declaration, and
+is the right tool inside a testbench. It is the wrong tool on the boundary of
+reusable IP: interface ports do not survive an IP-XACT package or a Verilog
+consumer, which is the same objection that sank the packed vector in §11.1, so
+the problem comes back one level out.
+
+**The trap worth the most.** In a bench, each stream usually has its own driving
+process. If the signal those processes write is a *packed vector* and each
+writes one bit of it, you can get a silent nothing: eight `initial` blocks each
+doing `s_tvalid[gl] <= 1'b1` left `s_tvalid` at zero for the whole simulation,
+with no multiple-driver warning from the simulator, and the symptom was a DUT
+that configured perfectly and never armed a layer. Making it an unpacked array
+— `logic s_tvalid[MAX_LAYERS]`, one element per stream — fixed it outright.
+
+So: in a bench, one element per stream, unpacked, and never a bit-select of a
+packed vector written from more than one process. The same applies to `TDATA`
+if it is held as `[N*W-1:0]` rather than `[W-1:0] [N]`.
+
+**Drive the streams you are not using to idle.** `TVALID` low, and the payload
+to anything defined. The DUT holds their `TREADY` low and ignores them, so it
+costs nothing, but an undriven port propagates X into the gather and from there
+into whatever a waveform or an assertion looks at next.
+
+### 11.8 Unused streams, and the lint you will get
+
+A build with `P_NUM_LAYERS < MAX_LAYERS` gathers all eight streams and then
+reads only the low ones, so the upper bits are driven and never used. Every
+linter says so, correctly:
+
+```
+%Warning-UNUSEDSIGNAL: Bits of signal are not used: 'in_tvalid'[7:4]
+%Warning-UNUSEDSIGNAL: Bits of signal are not used: 'in_tuser'[7:4]
+%Warning-UNUSEDSIGNAL: Bits of signal are not used: 'in_tlast'[7:4]
+```
+
+The alternative — gathering only the streams the build implements — is not
+writable: selecting between eight literal port names by a parameter needs eight
+conditional generate blocks per signal, which is forty more lines of exactly
+the code §11.6 is trying to make checkable. So the gather stays unconditional
+and the discard is made explicit instead, in the same loop that ties off
+`TREADY`:
+
+```systemverilog
+for (genvar gi = P_NUM_LAYERS; gi < MAX_LAYERS; gi++) begin : g_stream_unused
+  assign in_tready[gi] = 1'b0;
+
+  logic unused_stream;
+  assign unused_stream = ^{in_tvalid[gi], in_tuser[gi], in_tlast[gi], in_tdata[gi]};
+end
+```
+
+The reduction reads every bit once and goes nowhere; synthesis removes it.
+Naming it `unused_*` is the convention linters recognise as a deliberate
+discard, and it is worth the four lines for one reason: the alternative is a
+bulk waiver of `UNUSEDSIGNAL` on this file, and a bulk waiver hides the next
+one — a signal that is unused because it was *meant* to be connected.
+
+The register file has the same shape of leftover for the same reason (§11.4),
+and handles it the same way.
+
+### 11.9 How to know the wiring is right
+
+A transposed stream is not a crash. It is two windows in the right places
+showing each other's contents, which looks like a working mixer fed from
+mislabelled sources, and it survives most of the things you would normally
+trust.
+
+**It survives a bench with eight similar sources.** If every layer's stimulus
+is the same pattern, swapping two streams changes nothing anywhere. Make the
+stimulus a function of the stream index — this bench's `layer_pixel(layer, x, y)`
+takes the layer number and mixes it into every component — and a swap becomes a
+pixel mismatch on every overlapped pixel instead of nothing at all.
+
+**It survives single-source bring-up.** One stream at a time is the natural way
+to bring a mixer up and it checks one stream at a time: stream 0 into layer 0
+is right, and nothing has been said about 1 through 7. If you bring up
+incrementally, give each layer a *distinct* window as you go, so the picture
+says which port landed where.
+
+**Formal catches it directly, and cheaply.** The check is: stream *i*'s five
+ports equal the five signals arriving at layer *i*'s instance, reached through
+a hierarchical reference — `a_wire_*` in `formal/tops/fv_top.sv`. That is not
+two copies of the gather agreeing with each other, because the right-hand side
+is the port and the left-hand side is what the layer actually receives, so
+everything in between is under test. The checker writes the enumeration a
+second time on purpose, and in the other style — a concatenation, against the
+gather's per-element assigns — so the two cannot share a mistake in how they
+are shaped.
+
+One more property pays for itself: a stream the build does not implement must
+hold `TREADY` low (`a_unused_stream_stalled`). That one goes vacuous at
+`P_NUM_LAYERS = MAX_LAYERS`, which is why the proofs run at four layers by
+default and at eight in a task of their own — see §8.2 and `doc/formal.md` §7.
 
 ---
 
