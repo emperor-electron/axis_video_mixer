@@ -12,18 +12,23 @@ bookkeeping by comparison.
 
 ## 1. What it does
 
-Composites `N` RGBA8 video streams into one, under AXI4-Lite control, for
-picture-in-picture and tiled layouts.
+Composites up to eight RGBA video streams into one, under AXI4-Lite control,
+for picture-in-picture and tiled layouts.
 
 ```
-N x  AXI4-Stream RGBA8  ──►  mixer  ──►  1 x AXI4-Stream RGB8 or RGBA8
-                               ▲
+N x  AXI4-Stream RGBA  ──►  mixer  ──►  1 x AXI4-Stream RGB or RGBA
+   (N <= 8)                   ▲
                           AXI4-Lite
 ```
 
 Video AXI4-Stream conventions throughout (UG934): `TUSER` = SOF on the first
-pixel of a frame, `TLAST` = EOL on the last pixel of every line, one pixel per
-beat.
+pixel of a frame, `TLAST` = EOL on the last pixel of every line, `P_PPC` pixels
+per beat.
+
+A pixel is four colour components of `P_CH_W` bits each — 8, 10, 12 or 16 —
+packed `{R, G, B, A}` with R in the most significant. §12 is that parameter;
+§11 is the other thing the ports say about themselves, which is that each
+stream's signals are named ports rather than slices of a packed bus.
 
 ### 1.1 Requirements
 
@@ -31,7 +36,7 @@ Numbered so the verification plan in §8 can cite them.
 
 | | Requirement |
 |---|---|
-| **R1** | Composite `N` layers over a solid background using Porter-Duff *over* with straight (non-premultiplied) alpha. |
+| **R1** | Composite `N` layers, `1 <= N <= 8`, over a solid background using Porter-Duff *over* with straight (non-premultiplied) alpha. |
 | **R2** | Each layer occupies an arbitrary rectangle of the canvas, set at run time by `Ln_POS` and `Ln_SIZE`. |
 | **R3** | No scaling. A layer's stream must arrive at exactly the size its `Ln_SIZE` declares. |
 | **R4** | Per-layer alpha from a register, optionally multiplied by the pixel's own alpha channel. |
@@ -40,9 +45,11 @@ Numbered so the verification plan in §8 can cite them.
 | **R7** | Configuration changes take effect at an output frame boundary, never mid-frame. |
 | **R8** | Every fault is latched, attributable to a layer, and clearable: `CFG`, `STARVE`, `GEOM`, `SRC_STALL`, `OUT_STALL`. |
 | **R9** | Single clock domain — every input stream, the output, and the AXI4-Lite port. |
-| **R10** | `N` is a parameter. The register map is generated from the same number. |
+| **R10** | `N` is a parameter. One register map covers every `N`: it is generated for the maximum, and `CAPS.NUM_LAYERS` reports what was built. |
 | **R11** | `P_PPC` ∈ {1, 2, 4, 8} pixels per beat, on **every** stream — all `N` inputs and the output. Lane 0 in the least significant bits. |
 | **R12** | Horizontal geometry — `CANVAS.WIDTH`, every `Ln_POS.X`, every `Ln_SIZE.WIDTH` — must be a multiple of `P_PPC`. A value that is not is **rejected** with `ERR.CFG`, never rounded. `CAPS.PPC` reports the granularity. |
+| **R13** | Every signal of every input stream is its own named port. Nothing is packed across streams, and all eight stream port sets exist in every build. |
+| **R14** | `P_CH_W` ∈ {8, 10, 12, 16} bits per colour component, on **every** stream. The blend divides by `2**P_CH_W - 1`, so an alpha of full scale returns the top colour exactly at every width. `CAPS.CH_W` reports it. |
 
 ### 1.2 Explicit non-goals
 
@@ -59,7 +66,18 @@ Numbered so the verification plan in §8 can cite them.
   `P_PPC`-pixel grid horizontally (R12). Vertical placement is unconstrained.
   §10 is the whole chapter on lifting this, because it is the interesting part.
 - **Run-time z-order.** See §5.4.
-- **Colour space conversion**, chroma subsampling, more than one pixel per beat.
+- **More than eight streams.** The limit is the port list, not the datapath —
+  §11.3.
+- **A component width that is not 8, 10, 12 or 16.** The blend identity is
+  proved exact at those four and nowhere else, and a width that is not a whole
+  number of nibbles makes every software-side pixel unpack a shift-and-mask
+  with no byte alignment to fall back on. §12.1.
+- **Deep alpha and background registers.** `Ln_CTRL.ALPHA` and
+  `BACKGROUND.RGB` stay 8 bits per component at every `P_CH_W` and are expanded
+  in the datapath. §12.3.
+- **Per-interface component width**, for the same reason as per-interface
+  `P_PPC`.
+- **Colour space conversion** and chroma subsampling.
 
 ---
 
@@ -72,7 +90,12 @@ Tab 1 of the drawio file. Three pieces:
 - `axis_video_mixer_core` — output raster, window comparison, frame-boundary
   latch, blend cascade, error aggregation.
 - `axis_video_mixer_csr` — the generated register block plus an adapter that
-  turns corsair's flat per-layer ports into arrays.
+  turns corsair's flat per-layer ports into arrays, and ties off the layer
+  blocks the build does not implement.
+
+`axis_video_mixer` itself is wiring and nothing else: it gathers the eight sets
+of named stream ports into the arrays the datapath indexes, and connects the
+two blocks above. §11.
 
 Latency SOF-in to SOF-out is `2 + N` cycles: stage F, stage A, then one blend
 stage per layer.
@@ -259,20 +282,24 @@ and *over* onto an opaque destination needs only the top layer's alpha.
 Cost is depth `N` rather than `log2(N)` — latency, not frequency, since each
 stage is one multiply.
 
-### 5.2 `div255`, not `>> 8`
+### 5.2 `div_max`, not `>> C`
 
-An alpha of 255 must return the top colour exactly. `>> 8` returns 254/255 of
-it, and over a cascade that error accumulates until a stack of nominally opaque
-layers visibly darkens.
+An alpha at full scale must return the top colour exactly. `>> C` returns
+`(MAX-1)/MAX` of it, and over a cascade that error accumulates until a stack of
+nominally opaque layers visibly darkens.
 
 ```systemverilog
-div255(v) = (t + (t >> 8)) >> 8,  where t = v + 128
+MAX = 2**C - 1
+div_max(C, v) = (t + (t >> C)) >> C,  where t = v + 2**(C-1)
 ```
 
-Two adds and two shifts, no divider, no table. Exact against `round(v / 255)`
-for every `v` in `0 .. 65025` — verify this exhaustively before you trust it;
-that range is the full span the blend can produce, because `a + (255 - a) = 255`
-caps the numerator at `255 × 255`.
+Two adds and two shifts, no divider, no table. Exact against
+`round(v / MAX)` for every `v` in `0 .. MAX*MAX` — verify this exhaustively
+before you trust it; that range is the full span the blend can produce, because
+`a + (MAX - a) = MAX` caps the numerator at `MAX × MAX`.
+
+At `C = 8` that is the familiar `(t + (t >> 8)) >> 8` with `t = v + 128`. §12.2
+is why it generalises and §12.1 is why only four widths are admitted.
 
 ### 5.3 Alpha in its own stage
 
@@ -349,7 +376,7 @@ order the traps in §7 surface.
 
 | | Build | Done when |
 |---|---|---|
-| 1 | `div255` / `blend_ch` / `blend_rgb` as pure functions | exhaustively checked against `round(v/255)` over `0..65025` in whatever language is convenient — do this before any RTL |
+| 1 | `div_max` / `blend_ch` / `blend_rgb` as pure functions | exhaustively checked against `round(v/MAX)` over `0..MAX*MAX` in whatever language is convenient, at every component width you intend to support — do this before any RTL |
 | 2 | FWFT FIFO alone | random push/pop, `full`/`rd_valid` never lie, `level` matches |
 | 3 | **N = 1, layer spans the canvas, alpha forced 255** | a pass-through: output is bit-identical to input. Proves the raster, the pop, and the pipeline shift before any blending is in the way |
 | 4 | Add the blend against a solid background, still N = 1 | alpha 0 and 255 exactly, then the middle |
@@ -406,10 +433,11 @@ win_ok = ((x[i] | w[i] | canvas_width) & (P-1)) == 0;  // else ERR.CFG
 //   per beat: v_q[k] sof_q[k] eol_q[k] eof_q[k] popf_q[i] alphaf_q[i]
 //   per lane: acc_q[k][j] lrgb_q[k][i][j] la_q[k][i][j]
 
-// ---- arithmetic -------------------------------------------------------
-div255(v)          = (t + (t>>8)) >> 8,  t = v + 128
-blend_ch(top,bot,a)= div255(top*a + bot*(255-a))
-effective_alpha    = src_sel ? global_a : mul255(pixel_a, global_a)
+// ---- arithmetic (MAX = 2**C - 1, C = P_CH_W) --------------------------
+div_max(C,v)       = (t + (t>>C)) >> C,  t = v + 2**(C-1)
+blend_ch(C,top,bot,a) = div_max(C, top*a + bot*(MAX-a))
+effective_alpha    = src_sel ? global_a : mul_max(C, pixel_a, global_a)
+ch_up(C,v8)        = (v8 << (C-8)) | (v8 >> (16-C))   // 8-bit regs -> C bits
 ```
 
 ---
@@ -417,11 +445,13 @@ effective_alpha    = src_sel ? global_a : mul255(pixel_a, global_a)
 ## 6. Registers
 
 Full map in [`axis_video_mixer_regs.md`](axis_video_mixer_regs.md). Generated by
-`regs/gen_regs.py` from the same `N` that parameterises the RTL; the RTL asserts
-at elaboration that the two agree.
+`regs/gen_regs.py` for the maximum layer count, with `CAPS` reporting what was
+actually built — §11.4 is why it is that way round.
 
-Global block at `0x00`, per-layer blocks at `0x40 + 0x10n`, so adding a global
-register never renumbers a layer register.
+Global block at `0x00`, per-layer blocks at `0x40 + 0x10n` for `n` = 0..7, so
+adding a global register never renumbers a layer register. Software reads
+`CAPS.NUM_LAYERS` and stops there; the blocks above it are writable and
+readable and connected to nothing.
 
 ### 6.1 Double buffering
 
@@ -496,12 +526,25 @@ falls.
 | `mixer_move_layer_test` | R2, R7 — layer moved on a running mixer |
 | `mixer_backpressure_test` | R6 — random `TREADY`; pixels must be bit-identical to the unstalled run |
 
+`PPC` and `CH_W` are swept separately rather than crossed — `make ppc-sweep`
+and `make ch-sweep`, four regressions each. Crossing them would be sixteen
+regressions to find a fault either sweep finds on its own: `PPC` changes how
+many pixels share a beat and `CH_W` changes how wide a pixel is, and no
+mechanism in the block couples them. `make NUM_LAYERS=8 regress` is the third
+axis, and none of the three needs the register map regenerated.
+
 Two properties of the bench worth copying:
 
 - **The golden blend is written independently** — integer division where the RTL
-  uses the shift-and-add identity. Sharing the function would make the model
-  agree with the DUT by construction, which is the agreement the scoreboard
-  exists to test.
+  uses the shift-and-add identity, and its own copy of the 8-to-`C` register
+  expansion. Sharing the functions would make the model agree with the DUT by
+  construction, which is the agreement the scoreboard exists to test.
+- **The stimulus pattern reduces to the old one at `C = 8`.** A component is
+  the original 8-bit pattern expanded to `P_CH_W`, xor a second pattern in the
+  bits below bit 8 — and that second pattern is taken modulo `2**(C-8)`, which
+  is 1 at `C = 8`. So the 8-bit regression is bit-for-bit the stimulus it
+  always was, and a wider build exercises the precision it was built for
+  instead of running an 8-bit picture down a wider bus.
 - **The scoreboard recomputes each layer's pixels** from a shared content
   function rather than observing the input streams. That is what lets it predict
   a composite without subscribing to N input monitors and re-deriving their
@@ -515,10 +558,9 @@ testing what you think.
 
 ### 8.2 Formal
 
-`make -C formal`, about three and three-quarter minutes. Five proofs, 26
-tasks, in
-[`formal/`](../formal), documented in full in [`formal.md`](formal.md) — including what is bounded rather than
-proved, where every assumption is discharged, and what is not covered.
+`make -C formal`. Five proofs in [`formal/`](../formal), documented in full in
+[`formal.md`](formal.md) — including what is bounded rather than proved, where
+every assumption is discharged, and what is not covered.
 
 Three things here are the wrong shape for directed tests, and they are why the
 flow exists:
@@ -528,11 +570,12 @@ flow exists:
 | **R6** | "The output never stalls waiting on an input" is a claim about all possible input behaviour. `mixer_starve_test` stops one source at one moment; `a_raster_advances` says no combination of starving, faulting and backpressured layers can stop the raster, and proves it by induction. |
 | **§4** | Alignment is a counter invariant, which is what induction is good at. A one-beat offset is not a crash — it is a picture that looks almost right, and it survives a scoreboard built from the same assumption as the RTL. |
 | **R12** | Rejection logic is only ever exercised by tests that deliberately write bad values. The solver writes every bad value there is, every cycle; the claim proved is not "the validation looks right" but "no illegal window can become active, by any path". |
+| **R13** | The gather from the eight sets of named stream ports into the datapath's arrays is hand-written, eight assigns per field, and a transposed index there is two windows in the right places showing the wrong contents. A bring-up test with one source cannot see it, and a bench with eight similar sources cannot either. |
 
-Two more fall out cheaply. The blend arithmetic (§5.2) is combinational logic
-over a small input space, where formal was always the right tool — `div255`'s
-"verified exhaustively" is now a proof, and it extends to `blend_ch` and
-`blend_rgb`, whose input spaces are 2²⁴ and larger and were never exhausted.
+Two more fall out cheaply. The blend arithmetic (§5.2) is combinational logic,
+where formal was always the right tool — `div_max`'s "verified exhaustively" is
+now a proof at all four component widths, and it extends to `blend_ch` and
+`blend_rgb`, whose input spaces are 2⁴⁸ and larger and were never exhausted.
 And the AXI4-Lite port is generated code nobody reads, where a protocol
 violation wedges a processor bus rather than producing a wrong picture.
 
@@ -735,12 +778,257 @@ last `P-1` pixels of width.
 
 ---
 
-## 11. Results
+## 11. Eight streams, named ports
 
-Out-of-context, `xc7z045ffg900-2`, N = 4, constrained at **148.5 MHz**
-(`syn/syn.tcl`, 6.734 ns) — the 1080p60 pixel clock, so the numbers cover the
-harder of the two modes this was built for. Layer buffers hold 2048 pixels at
-every `P_PPC`, so the beat depth falls as the width rises.
+### 11.1 Why one port per signal
+
+Every signal of every input stream is its own named port: `s_axis0_tvalid`,
+`s_axis0_tready`, `s_axis0_tdata`, `s_axis0_tuser`, `s_axis0_tlast`, and the
+same five for streams 1 through 7. Nothing is packed across streams (R13).
+
+The block used to flatten them — one `P_NUM_LAYERS`-bit vector per handshake
+signal and one `P_NUM_LAYERS * P_BEAT_W`-bit vector for `TDATA` — on the
+grounds that unpacked array ports do not survive an IP-XACT or block design
+boundary. They do not, but a packed vector is the wrong fix, because the thing
+that has to survive the boundary is not the *array*, it is the *interface*.
+
+Interface inference in Vivado's IP packager and in a block design keys on the
+port name. Given `s_axis3_tdata`, `s_axis3_tvalid`, `s_axis3_tready`,
+`s_axis3_tuser` and `s_axis3_tlast` it recognises an AXI4-Stream slave called
+`s_axis3` with no manual mapping at all, and the connection automation will
+draw it. Given one 128-bit `s_axis_tdata` it recognises nothing: the integrator
+splits the bus by hand on the far side, and every integrator splits it slightly
+differently. The packing also has to be undone by whatever produced the four
+streams, which usually means four slices written out by hand there too — the
+flattening saved nobody anything and cost a place for an off-by-one to live.
+
+So the arrays stay, but they stay *inside*. `axis_video_mixer` gathers the
+named ports into them in one assign per port, and that gather is the only thing
+in the file that is not an instantiation.
+
+### 11.2 All eight exist in every build
+
+`P_NUM_LAYERS` is 1 to 8 and says how many streams are wired to the datapath.
+The ports for all eight exist regardless, because a port list cannot be
+generated — there is no construct that conditionally declares a port, and
+emitting the module from a script to get one would make the RTL unreadable for
+a gain of some wires.
+
+An unimplemented stream has its inputs ignored and its `TREADY` held **low**.
+Low rather than high, deliberately: high would consume beats and discard them,
+which looks exactly like a working connection and produces a black layer, while
+low stalls the producer in the first second of bring-up. A port that does not
+exist in this build should not accept data.
+
+Software is told the real count by `CAPS.NUM_LAYERS` and should size its layer
+loop from it. The registers for the unimplemented layers are still there and
+still read back what was written to them — that is corsair's storage, and
+leaving it connected to nothing is what makes those blocks harmless rather than
+absent — but their `Ln_STATUS` reads as a layer that is disabled and has never
+seen a stream, which is what it is.
+
+### 11.3 Why eight
+
+The datapath does not care. `P_NUM_LAYERS` sets the depth of the blend cascade
+and the number of layer front ends, and nothing in either has a limit short of
+what will fit.
+
+Eight is the port list and the register map. `ERR_LAYER` has one bit per layer
+in a 32-bit register, so the map could carry far more; the limit is that the
+map is generated for the maximum and every layer block costs four registers and
+a run of `corsair`-generated decode. Eight layer blocks is 0x40 through 0xBF,
+which keeps the whole map inside one 4 KiB page with room to spare, and eight
+is already more than any picture-in-picture layout has wanted here.
+
+Raising it is three edits in one place — `MAX_LAYERS` in the package,
+`MAX_LAYERS` in `gen_regs.py`, and the port list — plus a regenerated map. The
+cascade's latency is `2 + N` cycles, so the only thing that gets worse is how
+long a frame takes to come out.
+
+### 11.4 What the register map had to change
+
+Nothing about the map's layout, and one thing about where its contents come
+from.
+
+The map used to be generated for the layer count a build instantiated, and the
+adapter refused to elaborate against any other count. That made `N` a
+regeneration rather than a parameter, and it made `CAPS` a set of baked reset
+values that could only be right by having been regenerated. Two maps for two
+builds also meant two C headers and two copies of the documentation.
+
+Now the map is generated once, for `MAX_LAYERS`, and every field of `CAPS` is a
+hardware input driven from the parameter it describes — layer count, FIFO
+depth, output format, component width, pixels per clock. The adapter accepts
+any `P_NUM_LAYERS` up to the map's size and ties off the rest. One map
+describes every build, and a build and its map cannot disagree about what was
+built because the map no longer holds an opinion.
+
+That is also what took the register regeneration out of the `P_PPC` and
+`P_CH_W` story: `make -C tb ppc-sweep` and `make -C tb ch-sweep` are now plain
+regressions instead of rewriting checked-in generated files and putting them
+back afterwards.
+
+It is not free. The map carries eight layer blocks whatever the build
+instantiates, so a four-layer build pays for four sets of registers it never
+reads: 74 bits each, 296 flip-flops, about 0.3% of the block's flops (§13).
+Writable, readable, connected to nothing. The alternative is a map per layer
+count, and with it a C header per layer count, a copy of the register
+documentation per layer count, and an elaboration-time check whose whole job is
+to catch the moment they stop matching.
+
+---
+
+## 12. Colour component width
+
+### 12.1 Which widths, and why only those
+
+`P_CH_W` ∈ {8, 10, 12, 16} bits per colour component, on every stream in and
+out (R14). A pixel is four of those, so 32, 40, 48 or 64 bits, packed
+`{R, G, B, A}` with R in the most significant.
+
+8 is RGBA8, what the block started as. 10 and 12 are the deep-colour depths
+HDMI and DisplayPort carry, and the ones a camera pipeline tends to arrive in.
+16 is what a linear-light or HDR intermediate wants — a 16-bit component gives
+enough headroom that a cascade of blends does not quantise visibly in the
+shadows.
+
+The gaps are deliberate rather than for want of effort. The blend identity in
+§12.2 is **proved** exact at those four widths and nowhere else, so an
+unlisted width would composite with a rounding error that grows down the
+cascade. And a width that is not a whole number of nibbles makes every
+software-side pixel unpack a shift-and-mask with no byte alignment to fall back
+on, for a bus that is then an awkward width as well.
+
+One property of the four that is worth knowing because the testbench leans on
+it: `4 * P_CH_W` is a multiple of 8 at all of them, so a pixel is a whole
+number of bytes — 4, 5, 6 or 8 — and lane `j` of a beat still starts on a byte
+boundary even though the components inside it do not.
+
+### 12.2 The divide generalises; the shift does not
+
+§5.2 is the argument for dividing by 255 rather than shifting by 8. It is the
+same argument at any width, with the numbers moved: an alpha of full scale must
+return the top colour exactly, and `>> C` returns `(2**C - 2)/(2**C - 1)` of
+it. At 16 bits that is a smaller error per stage than at 8 — and it still
+accumulates, and it is still wrong in the one case anybody checks.
+
+So the divisor is `MAX = 2**C - 1`, and the identity is the 8-bit one read at a
+general width:
+
+```
+div_max(C, v) = (t + (t >> C)) >> C      where t = v + 2**(C-1)
+```
+
+It holds for the same reason: `1/(2**C - 1)` is
+`2**-C * (1 + 2**-C + 2**-2C + ...)`, and over the range a blend can produce
+the first two terms plus the rounding offset are already exact.
+
+"Already exact" is the part worth checking rather than believing, and it was
+checked twice. Exhaustively, against `round(v / MAX)` over the full
+`0 .. MAX*MAX` at all four widths — four billion values at `C = 16` — and in
+formal, in `formal/tops/fv_blend.sv`, which proves it as the pair of
+multiplicative bounds that define integer division. `doc/formal.md` §4 is what
+that proof covers and what it does not.
+
+The numerator peaks at `MAX * MAX`, because `a` and `MAX - a` sum to exactly
+`MAX`. At `C = 16` that is `65535 * 65535`, which needs all 32 bits of its
+container and not one more.
+
+### 12.3 `ALPHA` and `BACKGROUND` stay 8 bits
+
+`Ln_CTRL.ALPHA` is 8 bits and `BACKGROUND.RGB` is 24, at every `P_CH_W`. Both
+are expanded to the component width in the datapath as they are latched.
+
+The first reason is the map. Widening `ALPHA` would collide with `ALPHA_SRC` in
+the same register and widening `BACKGROUND` would need a second one, so a
+16-bit build and an 8-bit build would not share a register map — and §11.4 is
+the whole argument for why one map describing every build is worth more than
+this.
+
+The second is that neither field is a sample. Alpha is a fraction and a
+background is a colour someone picked; eight bits of each is not the thing deep
+colour was wanted for. What it was wanted for is the pixels, and those arrive
+at full width and are blended at full width.
+
+The expansion is bit replication — `(v << (C-8)) | (v >> (16-C))`, the standard
+8-to-`C` deep-colour expansion. `0x00` maps to 0 and `0xFF` maps to full scale,
+both exactly, so "transparent" and "opaque" survive it; in between it is
+monotone and within one LSB of the exact rational scaling `v * MAX / 255`.
+Within one LSB rather than exact because `v * MAX / 255` is not an integer at
+`C = 10` or 12 — no bit pattern can be exact there, which is the honest reason
+and not a shortcut. All three properties are proved in `fv_blend.sv`.
+
+At `C = 8` the expansion is `(v << 0) | (v >> 8)`, which is `v`. An 8-bit build
+gets the hardware it had before.
+
+### 12.4 What it costs
+
+The blend cascade is where it lands. Every stage carries an accumulator and an
+operand of `3 * P_CH_W` bits per layer per lane, and every stage is a
+`C x C`-bit multiply per component — so the arithmetic grows faster than
+linearly in `C` while the control does not grow at all.
+
+The layer buffers grow linearly: a 2048-pixel line buffer is 2048 × 32 at
+`C = 8` and 2048 × 64 at `C = 16`, twice the block RAM for the same number of
+pixels. §9.5 is the related trap for `P_PPC`, and it applies here too — the
+depth is in beats and what matters is the product.
+
+The raster, the window compares, the frame latch, the flow control and the
+error logic are all untouched. None of them looks inside a pixel, which is why
+`axis_mixer_layer` and `axis_mixer_fifo` needed nothing but a wider beat.
+
+### 12.5 Traps specific to this
+
+- **A package cannot be parameterised.** The blend functions live in
+  `axis_video_mixer_pkg` because the testbench's golden model and the RTL have
+  to be able to disagree, and a SystemVerilog package takes no parameters. The
+  functions therefore take the width as their first argument and work in
+  containers sized for the widest supported component; callers pass a parameter,
+  so it folds to a constant at elaboration and nothing variable survives into
+  the netlist. The convention is that a value arrives right-aligned and
+  zero-extended, and the accessors mask on the way out.
+- **`p[4*ch_w-1 -: ch_w]` is illegal** when `ch_w` is a function argument: an
+  indexed part-select needs a constant width. The accessors are shift-and-mask
+  for that reason, not for taste.
+- **Check the arithmetic container, not the declared width.** The first version
+  of the formal range guard compared the numerator after narrowing it to the
+  width the bounds were evaluated in, which let a value far outside the proved
+  range pass the guard with its top bits truncated away and then reach
+  `div_max` in full. The counterexample was real and the property was the thing
+  that was wrong. `doc/formal.md` §4.
+- **The register fields are not the datapath's widths.** `lay_alpha` is 8 bits
+  all the way from the register block to the frame latch and `P_CH_W` bits
+  after it. Mixing the two up gives a layer that is almost transparent at
+  `C = 16` and correct at `C = 8`, which is the worst possible place for the
+  bug to hide.
+
+---
+
+## 13. Results
+
+Out-of-context, `xc7z045ffg900-2`, N = 4, `P_CH_W = 8`, constrained at
+**148.5 MHz** (`syn/syn.tcl`, 6.734 ns) — the 1080p60 pixel clock, so the
+numbers cover the harder of the two modes this was built for. Layer buffers hold
+2048 pixels at every `P_PPC`, so the beat depth falls as the width rises.
+
+These were measured before `P_CH_W` and the named stream ports existed, and
+they stand for the configuration they name: four layers, 8-bit components.
+
+The datapath for that configuration is unchanged, which was checked rather than
+assumed: synthesising the old and the new RTL at `N = 4`, `P_PPC = 1`,
+`P_CH_W = 8` gives the same flip-flop count in the datapath and combinational
+totals within 0.3%. At `C = 8` the expansion in §12.3 folds to a wire and the
+port gather is wires, so there is nothing for it to cost.
+
+The register file does cost something, and it is worth naming: the map is now
+generated for eight layer blocks whatever the build instantiates (§11.4), so a
+four-layer build carries **296 extra flip-flops** — four unused blocks × 74
+register bits — which is exactly the difference the two synthesis runs showed.
+That is the price of one map describing every build, and at roughly 0.3% of this
+block's flops it is the right way round.
+
+**Nothing here has been measured at eight layers or at a wider component**, and
+§12.4 is the shape to expect rather than a number to quote.
 
 ```bash
 vivado -mode batch -log s.log -journal s.jou -source syn.tcl -tclargs 4   # PPC 4
@@ -762,8 +1050,11 @@ LUTs run a little under linear: ×1.6 for `P_PPC` 2, ×2.7 for 4, ×5.0 for 8. T
 sub-linearity is the shared control — one raster, one set of window compares,
 one register file, regardless of width.
 
-Zero DSPs at every width. The blend is `div255`, a pair of adds and shifts
-(§5.2), and the `× 255` multiplies map to LUT logic at this size.
+Zero DSPs at every width. The blend is `div_max`, a pair of adds and shifts
+(§5.2), and the `× MAX` multiplies map to LUT logic at this size. That is a
+statement about `P_CH_W = 8`; a 16-bit component makes every one of those
+multiplies four times the work, and DSP inference is the first thing to try if
+it gets tight.
 
 RAMB36 is flat to `P_PPC = 4` and then doubles; §9.5 is why, and it is not what
 you would guess from the bit count.

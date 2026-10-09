@@ -33,10 +33,15 @@ module mixer_tb_top;
   // rather than hiding behind capacity.
   parameter int FIFO_DEPTH = 128;
 
-  // Pixels per beat comes from the package, which takes it from the MIX_PPC
-  // define. Deliberately NOT a generic as well: two ways to set the same thing
-  // is two ways for them to disagree, and the link width the UVC is
-  // specialised on already follows the define.
+  // Pixels per beat and the component width come from the package, which takes
+  // them from the MIX_PPC and MIX_CH_W defines. Deliberately NOT generics as
+  // well: two ways to set the same thing is two ways for them to disagree, and
+  // the link width the UVC is specialised on already follows the defines.
+  //
+  // NUM_LAYERS may be anything from 1 to MIX_MAX_LAYERS. The DUT brings out
+  // MIX_MAX_LAYERS sets of stream ports in every build and reports how many
+  // are implemented through CAPS.NUM_LAYERS, so the register map does not have
+  // to be regenerated to change this.
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Clock and reset
@@ -64,20 +69,34 @@ module mixer_tb_top;
   axi_lite_if #(12, 32) axil_if (aclk, aresetn);
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  // Flatten the per-layer interfaces into the DUT's packed vectors
+  // Wire the per-layer interfaces to the DUT's named stream ports
+  //
+  // The arrays are indexed by a genvar so the interface array can be walked in
+  // a loop; the DUT connection below is one line per port, because a port name
+  // is not something a genvar can build. Entries at or above NUM_LAYERS have
+  // no interface behind them and are driven idle -- the DUT holds their TREADY
+  // low in any case, but leaving them undriven would propagate X into a port
+  // that is supposed to be a don't-care.
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  logic [           NUM_LAYERS-1:0] s_tvalid;
-  logic [           NUM_LAYERS-1:0] s_tready;
-  logic [NUM_LAYERS*MIX_DATA_BYTES*8-1:0] s_tdata;
-  logic [           NUM_LAYERS-1:0] s_tuser;
-  logic [           NUM_LAYERS-1:0] s_tlast;
+  logic [         MIX_DATA_BYTES*8-1:0] s_tdata [MIX_MAX_LAYERS];
+  logic                                 s_tvalid[MIX_MAX_LAYERS];
+  logic                                 s_tready[MIX_MAX_LAYERS];
+  logic                                 s_tuser [MIX_MAX_LAYERS];
+  logic                                 s_tlast [MIX_MAX_LAYERS];
 
   for (genvar gi = 0; gi < NUM_LAYERS; gi++) begin : g_layer_wire
     assign s_tvalid[gi] = layer_if[gi].tvalid;
-    assign s_tdata[gi*MIX_DATA_BYTES*8+:MIX_DATA_BYTES*8] = layer_if[gi].tdata;
-    assign s_tuser[gi] = layer_if[gi].tuser[0];
-    assign s_tlast[gi] = layer_if[gi].tlast;
+    assign s_tdata[gi]  = layer_if[gi].tdata;
+    assign s_tuser[gi]  = layer_if[gi].tuser[0];
+    assign s_tlast[gi]  = layer_if[gi].tlast;
     assign layer_if[gi].tready = s_tready[gi];
+  end
+
+  for (genvar gi = NUM_LAYERS; gi < MIX_MAX_LAYERS; gi++) begin : g_layer_idle
+    assign s_tvalid[gi] = 1'b0;
+    assign s_tdata[gi]  = '0;
+    assign s_tuser[gi]  = 1'b0;
+    assign s_tlast[gi]  = 1'b0;
   end
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -105,6 +124,7 @@ module mixer_tb_top;
       .P_FIFO_DEPTH   (FIFO_DEPTH),
       .P_OUT_HAS_ALPHA(1'b1),
       .P_PPC          (MIX_PPC),
+      .P_CH_W         (MIX_CH_W),
       .P_AXIL_ADDR_W  (12)
   ) dut (
       .clk  (aclk),
@@ -130,11 +150,53 @@ module mixer_tb_top;
       .s_axil_rvalid (axil_if.rvalid),
       .s_axil_rready (axil_if.rready),
 
-      .s_axis_tvalid(s_tvalid),
-      .s_axis_tready(s_tready),
-      .s_axis_tdata (s_tdata),
-      .s_axis_tuser (s_tuser),
-      .s_axis_tlast (s_tlast),
+      .s_axis0_tvalid(s_tvalid[0]),
+      .s_axis0_tready(s_tready[0]),
+      .s_axis0_tdata (s_tdata[0]),
+      .s_axis0_tuser (s_tuser[0]),
+      .s_axis0_tlast (s_tlast[0]),
+
+      .s_axis1_tvalid(s_tvalid[1]),
+      .s_axis1_tready(s_tready[1]),
+      .s_axis1_tdata (s_tdata[1]),
+      .s_axis1_tuser (s_tuser[1]),
+      .s_axis1_tlast (s_tlast[1]),
+
+      .s_axis2_tvalid(s_tvalid[2]),
+      .s_axis2_tready(s_tready[2]),
+      .s_axis2_tdata (s_tdata[2]),
+      .s_axis2_tuser (s_tuser[2]),
+      .s_axis2_tlast (s_tlast[2]),
+
+      .s_axis3_tvalid(s_tvalid[3]),
+      .s_axis3_tready(s_tready[3]),
+      .s_axis3_tdata (s_tdata[3]),
+      .s_axis3_tuser (s_tuser[3]),
+      .s_axis3_tlast (s_tlast[3]),
+
+      .s_axis4_tvalid(s_tvalid[4]),
+      .s_axis4_tready(s_tready[4]),
+      .s_axis4_tdata (s_tdata[4]),
+      .s_axis4_tuser (s_tuser[4]),
+      .s_axis4_tlast (s_tlast[4]),
+
+      .s_axis5_tvalid(s_tvalid[5]),
+      .s_axis5_tready(s_tready[5]),
+      .s_axis5_tdata (s_tdata[5]),
+      .s_axis5_tuser (s_tuser[5]),
+      .s_axis5_tlast (s_tlast[5]),
+
+      .s_axis6_tvalid(s_tvalid[6]),
+      .s_axis6_tready(s_tready[6]),
+      .s_axis6_tdata (s_tdata[6]),
+      .s_axis6_tuser (s_tuser[6]),
+      .s_axis6_tlast (s_tlast[6]),
+
+      .s_axis7_tvalid(s_tvalid[7]),
+      .s_axis7_tready(s_tready[7]),
+      .s_axis7_tdata (s_tdata[7]),
+      .s_axis7_tuser (s_tuser[7]),
+      .s_axis7_tlast (s_tlast[7]),
 
       .m_axis_tvalid(m_tvalid),
       .m_axis_tready(m_tready),

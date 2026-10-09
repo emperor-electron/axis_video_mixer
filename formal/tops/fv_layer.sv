@@ -52,8 +52,13 @@ module fv_layer
     // any threshold. The watchdog task narrows it so that the threshold is
     // actually reachable within the BMC depth.
     parameter int FV_MAX_STALL = 0,
+    // Colour component width. Nothing in this block looks inside a pixel, so
+    // every property here holds at any width and the proofs run at the
+    // narrowest -- but the beat width has to be right or the DUT would not
+    // elaborate.
+    parameter int P_CH_W = 8,
     // Derived.
-    parameter int P_BEAT_W = P_PPC * PX_W
+    parameter int P_BEAT_W = P_PPC * 4 * P_CH_W
 ) (
     input logic clk,
 
@@ -112,7 +117,8 @@ module fv_layer
 
   axis_mixer_layer #(
       .P_FIFO_DEPTH(P_FIFO_DEPTH),
-      .P_PPC       (P_PPC)
+      .P_PPC       (P_PPC),
+      .P_CH_W      (P_CH_W)
   ) dut (
       .clk  (clk),
       .rst_n(rst_n),

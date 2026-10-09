@@ -43,6 +43,21 @@
 //           as it did before. See doc/design.md section 10 for what relaxing it
 //           costs.
 //
+//           COMPONENT WIDTH. A colour component is P_CH_W bits -- 8, 10, 12 or
+//           16 -- so a pixel is 4*P_CH_W bits and a beat is P_PPC of those. The
+//           width reaches almost nothing here except as a vector size: the
+//           blend arithmetic lives in the package and takes the width as an
+//           argument, and the raster, the window compares and the flow control
+//           never look inside a pixel at all.
+//
+//           Two things do change. The blend divides by 2**P_CH_W - 1 rather
+//           than by 255, because full scale is what an alpha of "opaque" has to
+//           be, and the two register fields that are expressed in 8 bits
+//           whatever the component width -- L<i>_CTRL.ALPHA and BACKGROUND.RGB
+//           -- are expanded to the component width as they are latched. Both
+//           belong to the package; see ch_up and rgb_up there for why the
+//           registers stay 8 bits.
+//
 //           Geometry is double buffered. Position, size, enable and alpha are
 //           latched at a frame boundary and only there, so software can move a
 //           window whenever it likes without tearing the frame in flight.
@@ -58,11 +73,14 @@ module axis_video_mixer_core
     parameter int P_FIFO_DEPTH = 2048,
     parameter bit P_OUT_HAS_ALPHA = 1'b1,
     parameter int P_PPC = 1,
+    parameter int P_CH_W = 8,
     // Derived; do not override. Present as parameters only because a port width
     // cannot reference a localparam declared in the module body.
-    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? PX_W : RGB_W,
+    parameter int P_PX_W = 4 * P_CH_W,
+    parameter int P_RGB_W = 3 * P_CH_W,
+    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? P_PX_W : P_RGB_W,
     parameter int P_OUT_W = P_PPC * P_PX_OUT_W,
-    parameter int P_BEAT_W = P_PPC * PX_W
+    parameter int P_BEAT_W = P_PPC * P_PX_W
 ) (
     input logic clk,
     input logic rst_n,
@@ -101,7 +119,7 @@ module axis_video_mixer_core
     output logic [            15:0] lay_level          [P_NUM_LAYERS],
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
-    // Layer input streams, RGBA8
+    // Layer input streams, RGBA with a P_CH_W-bit component
     ////////////////////////////////////////////////////////////////////////////////////////////////
     input  logic [P_NUM_LAYERS-1:0] s_axis_tvalid,
     output logic [P_NUM_LAYERS-1:0] s_axis_tready,
@@ -127,6 +145,10 @@ module axis_video_mixer_core
   localparam int          LP_LOG2_PPC = $clog2(P_PPC);
   localparam logic [15:0] LP_PPC_MASK = 16'(P_PPC - 1);
 
+  // Full scale for one component: what "opaque" means, and what the blend
+  // divides by.
+  localparam logic [P_CH_W-1:0] LP_OPAQUE = {P_CH_W{1'b1}};
+
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Active configuration
   //
@@ -134,11 +156,11 @@ module axis_video_mixer_core
   // drawn with. The two are only ever equalised at a frame boundary.
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   logic [15:0] act_w, act_h;
-  logic [            23:0] act_bg;
+  logic [     P_RGB_W-1:0] act_bg;  // expanded to the component width
   logic                    act_ok;  // the active canvas is usable
 
   logic [P_NUM_LAYERS-1:0] act_en;
-  logic [             7:0] act_alpha                              [P_NUM_LAYERS];
+  logic [      P_CH_W-1:0] act_alpha                              [P_NUM_LAYERS];
   logic [P_NUM_LAYERS-1:0] act_asrc;
   logic [            15:0] act_x                                  [P_NUM_LAYERS];
   logic [            15:0] act_y                                  [P_NUM_LAYERS];
@@ -255,11 +277,11 @@ module axis_video_mixer_core
       act_w <= 16'd0;
       act_bw <= 16'd0;
       act_h <= 16'd0;
-      act_bg <= 24'd0;
+      act_bg <= '0;
       act_en <= '0;
       act_asrc <= '0;
       for (int i = 0; i < P_NUM_LAYERS; i++) begin
-        act_alpha[i] <= 8'd0;
+        act_alpha[i] <= '0;
         act_x[i]     <= 16'd0;
         act_y[i]     <= 16'd0;
         act_w_l[i]   <= 16'd0;
@@ -278,11 +300,11 @@ module axis_video_mixer_core
         act_h  <= canvas_height;
         act_ok <= 1'b1;
       end
-      act_bg   <= background_rgb;
+      act_bg   <= P_RGB_W'(rgb_up(P_CH_W, background_rgb));
       act_en   <= want_en;
       act_asrc <= lay_alpha_src;
       for (int i = 0; i < P_NUM_LAYERS; i++) begin
-        act_alpha[i] <= lay_alpha[i];
+        act_alpha[i] <= P_CH_W'(ch_up(P_CH_W, lay_alpha[i]));
         act_x[i]     <= lay_x[i];
         act_y[i]     <= lay_y[i];
         act_w_l[i]   <= lay_w[i];
@@ -316,7 +338,8 @@ module axis_video_mixer_core
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_layer
     axis_mixer_layer #(
         .P_FIFO_DEPTH(P_FIFO_DEPTH),
-        .P_PPC       (P_PPC)
+        .P_PPC       (P_PPC),
+        .P_CH_W      (P_CH_W)
     ) u_layer (
         .clk          (clk),
         .rst_n        (rst_n),
@@ -453,17 +476,17 @@ module axis_video_mixer_core
   //
   // pxf_q is [layer][lane]: one beat per layer, unpacked into lanes here so
   // that nothing downstream has to do bit slicing.
-  logic [        PX_W-1:0] pxf_q   [P_NUM_LAYERS] [P_PPC];
+  logic [      P_PX_W-1:0] pxf_q   [P_NUM_LAYERS] [P_PPC];
   logic [P_NUM_LAYERS-1:0] popf_q;
-  logic [             7:0] alphaf_q[P_NUM_LAYERS];
+  logic [      P_CH_W-1:0] alphaf_q[P_NUM_LAYERS];
   logic [P_NUM_LAYERS-1:0] asrcf_q;
-  logic [       RGB_W-1:0] bgf_q;
+  logic [     P_RGB_W-1:0] bgf_q;
   logic vf_q, soff_q, eolf_q, eoff_q;
 
   // [stage][lane] for the accumulator, [stage][layer][lane] for the operands.
-  logic [RGB_W-1:0] acc_q [P_NUM_LAYERS+1] [P_PPC];
-  logic [RGB_W-1:0] lrgb_q[P_NUM_LAYERS+1] [P_NUM_LAYERS] [P_PPC];
-  logic [      7:0] la_q  [P_NUM_LAYERS+1] [P_NUM_LAYERS] [P_PPC];
+  logic [ P_RGB_W-1:0] acc_q [P_NUM_LAYERS+1] [P_PPC];
+  logic [ P_RGB_W-1:0] lrgb_q[P_NUM_LAYERS+1] [P_NUM_LAYERS] [P_PPC];
+  logic [  P_CH_W-1:0] la_q  [P_NUM_LAYERS+1] [P_NUM_LAYERS] [P_PPC];
   // Control is per stage only -- every lane of a beat shares it.
   logic             v_q   [P_NUM_LAYERS+1];
   logic             sof_q [P_NUM_LAYERS+1];
@@ -490,7 +513,7 @@ module axis_video_mixer_core
       for (int i = 0; i < P_NUM_LAYERS; i++) begin
         alphaf_q[i] <= act_alpha[i];
         for (int j = 0; j < P_PPC; j++) begin
-          pxf_q[i][j] <= lay_px[i][j*PX_W+:PX_W];
+          pxf_q[i][j] <= lay_px[i][j*P_PX_W+:P_PX_W];
         end
       end
     end
@@ -510,11 +533,16 @@ module axis_video_mixer_core
       for (int j = 0; j < P_PPC; j++) acc_q[0][j] <= bgf_q;
       for (int i = 0; i < P_NUM_LAYERS; i++) begin
         for (int j = 0; j < P_PPC; j++) begin
-          lrgb_q[0][i][j] <= px_rgb(pxf_q[i][j]);
+          // The package works in its maximum container widths, so every call
+          // zero-extends on the way in and truncates on the way out. Both are
+          // exact: a P_CH_W-bit value in a wider container is the same number,
+          // and the result cannot exceed P_CH_W bits.
+          lrgb_q[0][i][j] <= P_RGB_W'(px_rgb(P_CH_W, PX_MAX_W'(pxf_q[i][j])));
           // popf_q is per LAYER, not per lane -- a beat-aligned window pops all
           // P_PPC lanes of a layer together or none of them.
           la_q[0][i][j] <= popf_q[i] ?
-              effective_alpha(px_a(pxf_q[i][j]), alphaf_q[i], asrcf_q[i]) : 8'd0;
+              P_CH_W'(effective_alpha(P_CH_W, px_a(P_CH_W, PX_MAX_W'(pxf_q[i][j])),
+                                      CH_MAX_W'(alphaf_q[i]), asrcf_q[i])) : '0;
         end
       end
     end
@@ -531,7 +559,9 @@ module axis_video_mixer_core
         eof_q[gk+1] <= eof_q[gk];
         // P_PPC independent blends, one per lane, all of layer gk.
         for (int j = 0; j < P_PPC; j++) begin
-          acc_q[gk+1][j] <= blend_rgb(lrgb_q[gk][gk][j], acc_q[gk][j], la_q[gk][gk][j]);
+          acc_q[gk+1][j] <= P_RGB_W'(blend_rgb(P_CH_W, RGB_MAX_W'(lrgb_q[gk][gk][j]),
+                                                RGB_MAX_W'(acc_q[gk][j]),
+                                                CH_MAX_W'(la_q[gk][gk][j])));
         end
         // Only entries at or above gk are still needed downstream; the rest
         // form a chain to nowhere and are trimmed during synthesis.
@@ -557,7 +587,7 @@ module axis_video_mixer_core
     if (P_OUT_HAS_ALPHA) begin : g_rgba
       // Everything below the top layer has been composited in, so the result is
       // opaque by construction.
-      assign m_axis_tdata[gj*P_PX_OUT_W+:P_PX_OUT_W] = {acc_q[P_NUM_LAYERS][gj], OPAQUE};
+      assign m_axis_tdata[gj*P_PX_OUT_W+:P_PX_OUT_W] = {acc_q[P_NUM_LAYERS][gj], LP_OPAQUE};
     end else begin : g_rgb
       assign m_axis_tdata[gj*P_PX_OUT_W+:P_PX_OUT_W] = acc_q[P_NUM_LAYERS][gj];
     end

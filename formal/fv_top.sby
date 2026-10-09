@@ -8,6 +8,9 @@
 #           of the stream ports, and bounded response latency on the control
 #           port, 20 cycles from reset
 #   prove   the same, unbounded, by k-induction
+#   wire8   the same at P_NUM_LAYERS = 8, where every stream port the block
+#           brings out is wired to a layer and the tie-off properties go vacuous
+#   deep    the same at P_CH_W = 16, the widest beat the block carries
 #   cover   software can actually reach the datapath: a write enables the
 #           mixer, a layer joins the composite, a frame comes out, and an error
 #           bit is raised and then cleared
@@ -19,18 +22,26 @@
 # handle. What is left for this level is the control port, the interrupt, and
 # the wiring between.
 #
-# P_NUM_LAYERS is four here and two in fv_core.sby, because the generated
-# register map is built for four and the CSR adapter refuses anything else.
+# P_NUM_LAYERS is four in most tasks and two in fv_core.sby, which is now a
+# free choice rather than a constraint: the register map is generated for the
+# maximum and the adapter accepts any count up to it. Four is what keeps the
+# tie-off of the unimplemented streams non-vacuous; wire8 covers the other end.
 # ==============================================================================
 
 [tasks]
 bmc
 prove
+wire8
+deep
 cover
 
 [options]
 bmc:   mode bmc
 bmc:   depth 20
+wire8: mode bmc
+wire8: depth 8
+deep:  mode bmc
+deep:  depth 8
 prove: mode prove
 prove: depth 12
 cover: mode cover
@@ -42,7 +53,10 @@ smtbmc boolector
 [script]
 plugin -i slang
 prove: read_slang --top fv_top -G FV_CHECK_BOUNDED=0 axis_video_mixer_pkg.sv axis_video_mixer_regs.v axis_video_mixer_csr.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv axis_video_mixer.sv fv_axil_props.sv fv_axil_bind.sv fv_top.sv
-~prove: read_slang --top fv_top axis_video_mixer_pkg.sv axis_video_mixer_regs.v axis_video_mixer_csr.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv axis_video_mixer.sv fv_axil_props.sv fv_axil_bind.sv fv_top.sv
+wire8: read_slang --top fv_top -G P_NUM_LAYERS=8 axis_video_mixer_pkg.sv axis_video_mixer_regs.v axis_video_mixer_csr.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv axis_video_mixer.sv fv_axil_props.sv fv_axil_bind.sv fv_top.sv
+deep:  read_slang --top fv_top -G P_CH_W=16 axis_video_mixer_pkg.sv axis_video_mixer_regs.v axis_video_mixer_csr.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv axis_video_mixer.sv fv_axil_props.sv fv_axil_bind.sv fv_top.sv
+bmc:   read_slang --top fv_top axis_video_mixer_pkg.sv axis_video_mixer_regs.v axis_video_mixer_csr.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv axis_video_mixer.sv fv_axil_props.sv fv_axil_bind.sv fv_top.sv
+cover: read_slang --top fv_top axis_video_mixer_pkg.sv axis_video_mixer_regs.v axis_video_mixer_csr.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv axis_video_mixer.sv fv_axil_props.sv fv_axil_bind.sv fv_top.sv
 prep -top fv_top
 
 [files]

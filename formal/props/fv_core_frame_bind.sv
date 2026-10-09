@@ -10,7 +10,8 @@
 bind axis_video_mixer_core fv_core_frame #(
     .P_NUM_LAYERS   (P_NUM_LAYERS),
     .P_PPC          (P_PPC),
-    .P_OUT_HAS_ALPHA(P_OUT_HAS_ALPHA)
+    .P_OUT_HAS_ALPHA(P_OUT_HAS_ALPHA),
+    .P_CH_W         (P_CH_W)
 ) u_fv_frame (
     .clk     (clk),
     .rst_n   (rst_n),

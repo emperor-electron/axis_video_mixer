@@ -14,6 +14,11 @@
 #   datapath   with every layer fully transparent, the composite is the
 #              background exactly, on every lane -- one assertion across the
 #              whole cascade
+#   deep       datapath again at P_CH_W = 16, the widest component. The
+#              cascade's accumulators and operands are 48 bits there rather
+#              than 24, and the background arrives through the 8-to-16 bit
+#              expansion rather than as itself, so it is a different claim and
+#              not a repeat of one
 #   ppc        the invariants again at P_PPC 2, where a control signal reaching
 #              the wrong lane would show
 #   cover      the interesting states are reachable -- above all, a layer
@@ -38,6 +43,12 @@
 #                    the solver a lot for properties that cannot observe any
 #                    of it. datapath leaves it off, because free pixel data
 #                    behind a zero alpha is exactly what it checks
+#
+# deep is depth 12 rather than 16 for the same reason, and the reason is worth
+# recording because it is where the limit actually is. Per-step BMC cost climbs
+# steeply past step 13 at 16 bits: depth 12 takes 103 s, and depth 16 had not
+# cleared step 14 after six minutes. Twelve steps still puts several output
+# beats through a four-stage pipeline, which is what the property needs.
 #   only fv_core_frame bound
 #                    the FIFO, layer and core invariants are checked by bmc and
 #                    prove, over a FREE configuration rather than a frozen one,
@@ -49,6 +60,7 @@ bmc
 prove
 frame
 datapath
+deep
 ppc
 cover
 
@@ -61,6 +73,8 @@ frame:    mode bmc
 frame:    depth 16
 datapath: mode bmc
 datapath: depth 16
+deep:     mode bmc
+deep:     depth 12
 ppc:      mode bmc
 ppc:      depth 20
 cover:    mode cover
@@ -76,6 +90,7 @@ prove:    read_slang --top fv_core -G FV_CHECK_LIVENESS=0 axis_video_mixer_pkg.s
 ppc:      read_slang --top fv_core -G P_PPC=2 -G FV_MAX_DIM=4 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_core_props.sv fv_core_bind.sv fv_core.sv
 frame:    read_slang --top fv_core -G FV_STATIC_CFG=1 -G FV_CONST_PIXELS=1 -G FV_MAX_DIM=2 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_core_frame.sv fv_core_frame_bind.sv fv_core.sv
 datapath: read_slang --top fv_core -G FV_STATIC_CFG=1 -G FV_ALL_TRANSPARENT=1 -G FV_MAX_DIM=2 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_core_frame.sv fv_core_frame_bind.sv fv_core.sv
+deep:     read_slang --top fv_core -G FV_STATIC_CFG=1 -G FV_ALL_TRANSPARENT=1 -G FV_MAX_DIM=2 -G P_CH_W=16 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_core_frame.sv fv_core_frame_bind.sv fv_core.sv
 cover:    read_slang --top fv_core -G FV_STATIC_CFG=1 -G FV_MAX_DIM=3 axis_video_mixer_pkg.sv axis_mixer_fifo.sv axis_mixer_layer.sv axis_video_mixer_core.sv fv_fifo_props.sv fv_fifo_bind.sv fv_layer_props.sv fv_layer_bind.sv fv_core_props.sv fv_core_bind.sv fv_core_frame.sv fv_core_frame_bind.sv fv_core.sv
 prep -top fv_core
 

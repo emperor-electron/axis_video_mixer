@@ -7,6 +7,7 @@ yosys-slang plus boolector, all three from the OSS CAD Suite.
 make            # every proof, every task
 make quick      # the fast half, about a minute, for use while editing RTL
 make core TASKS=prove
+make blend TASKS="div16 bound8"
 make report     # re-print the last run's summary without re-running
 make tools      # check that sby, yosys, the slang plugin and boolector are here
 ```
@@ -33,6 +34,11 @@ The `.sby` files are the real interface. `sby -f fv_core.sby prove` and
 `make core TASKS=prove` do the same thing; the Makefile exists to run them all
 and to summarise, because a suite that is awkward to run in one command stops
 being run.
+
+Task names in `fv_blend.sby` are a property group and a component width:
+`div16` is the exactness group at `P_CH_W = 16`, `up10` the register-expansion
+group at 10. Both axes are there for solver cost, and §4 of `doc/formal.md`
+says which groups do not run at every width and what that leaves open.
 
 ## Two things to know before reading a property file
 

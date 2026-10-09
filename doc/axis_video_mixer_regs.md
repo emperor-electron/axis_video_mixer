@@ -23,7 +23,7 @@ Base address: 0x00000000
 | Name                     | Address    | Description |
 | :---                     | :---       | :---        |
 | [ID](#id)                | 0x000      | Identification and version. Read-only constants, so a correct read here proves the AXI4-Lite path reaches this block before any other register is trusted. |
-| [CAPS](#caps)            | 0x004      | Build-time capabilities, so software can size its own layer loops from the hardware it is actually talking to instead of from a compile-time assumption. These are constants baked into the map by gen_regs.py; axis_video_mixer.sv asserts at elaboration that they match the RTL parameters, so a map and a build that disagree fail loudly rather than misreporting. |
+| [CAPS](#caps)            | 0x004      | Build-time capabilities, so software can size its own layer loops and unpack pixels from the hardware it is actually talking to instead of from a compile-time assumption. Every field is driven from the corresponding RTL parameter rather than baked into the map, so one map describes every build and none of these can be stale. |
 | [SCRATCH](#scratch)      | 0x008      | Read/write scratchpad with no hardware effect. Exists so a write-then-read test can prove the bus end to end without disturbing the picture. |
 | [CTRL](#ctrl)            | 0x00c      | Global mixer control. |
 | [CANVAS](#canvas)        | 0x010      | Output raster size in pixels. The mixer emits HEIGHT lines of WIDTH pixels per frame. Changing either takes effect at the next output frame boundary. |
@@ -50,6 +50,22 @@ Base address: 0x00000000
 | [L3_POS](#l3_pos)        | 0x074      | Layer 3 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears. |
 | [L3_SIZE](#l3_size)      | 0x078      | Layer 3 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped. |
 | [L3_STATUS](#l3_status)  | 0x07c      | Layer 3 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER. |
+| [L4_CTRL](#l4_ctrl)      | 0x080      | Layer 4 enable and alpha. Takes effect at the next output frame boundary. |
+| [L4_POS](#l4_pos)        | 0x084      | Layer 4 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears. |
+| [L4_SIZE](#l4_size)      | 0x088      | Layer 4 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped. |
+| [L4_STATUS](#l4_status)  | 0x08c      | Layer 4 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER. |
+| [L5_CTRL](#l5_ctrl)      | 0x090      | Layer 5 enable and alpha. Takes effect at the next output frame boundary. |
+| [L5_POS](#l5_pos)        | 0x094      | Layer 5 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears. |
+| [L5_SIZE](#l5_size)      | 0x098      | Layer 5 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped. |
+| [L5_STATUS](#l5_status)  | 0x09c      | Layer 5 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER. |
+| [L6_CTRL](#l6_ctrl)      | 0x0a0      | Layer 6 enable and alpha. Takes effect at the next output frame boundary. |
+| [L6_POS](#l6_pos)        | 0x0a4      | Layer 6 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears. |
+| [L6_SIZE](#l6_size)      | 0x0a8      | Layer 6 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped. |
+| [L6_STATUS](#l6_status)  | 0x0ac      | Layer 6 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER. |
+| [L7_CTRL](#l7_ctrl)      | 0x0b0      | Layer 7 enable and alpha. Takes effect at the next output frame boundary. |
+| [L7_POS](#l7_pos)        | 0x0b4      | Layer 7 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears. |
+| [L7_SIZE](#l7_size)      | 0x0b8      | Layer 7 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped. |
+| [L7_STATUS](#l7_status)  | 0x0bc      | Layer 7 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER. |
 
 ## ID
 
@@ -57,33 +73,33 @@ Identification and version. Read-only constants, so a correct read here proves t
 
 Address offset: 0x000
 
-Reset value: 0x4d580100
+Reset value: 0x4d580101
 
 
 | Name             | Bits   | Mode            | Reset      | Description |
 | :---             | :---   | :---            | :---       | :---        |
 | MAGIC            | 31:16  | ro              | 0x4d58     | Always 0x4D58 (ASCII 'MX'). A read of 0x0000 or 0xFFFF means the bus is not reaching the mixer. |
 | VER_MAJOR        | 15:8   | ro              | 0x01       | Major version. Increment on any incompatible map change. |
-| VER_MINOR        | 7:0    | ro              | 0x00       | Minor version. Increment on backwards-compatible additions. |
+| VER_MINOR        | 7:0    | ro              | 0x01       | Minor version. Increment on backwards-compatible additions. |
 
 Back to [Register map](#register-map-summary).
 
 ## CAPS
 
-Build-time capabilities, so software can size its own layer loops from the hardware it is actually talking to instead of from a compile-time assumption. These are constants baked into the map by gen_regs.py; axis_video_mixer.sv asserts at elaboration that they match the RTL parameters, so a map and a build that disagree fail loudly rather than misreporting.
+Build-time capabilities, so software can size its own layer loops and unpack pixels from the hardware it is actually talking to instead of from a compile-time assumption. Every field is driven from the corresponding RTL parameter rather than baked into the map, so one map describes every build and none of these can be stale.
 
 Address offset: 0x004
 
-Reset value: 0x01010b04
+Reset value: 0x00000000
 
 
 | Name             | Bits   | Mode            | Reset      | Description |
 | :---             | :---   | :---            | :---       | :---        |
-| PPC              | 31:24  | ro              | 0x01       | Pixels per beat on every stream, 1, 2, 4 or 8. Also the horizontal alignment granularity: CANVAS.WIDTH, Ln_POS.X and Ln_SIZE.WIDTH must all be multiples of this, and a write that is not is rejected with ERR.CFG rather than rounded. Read it before computing a layout. |
-| -                | 23:17  | -               | 0x0        | Reserved |
-| OUT_HAS_ALPHA    | 16     | ro              | 0x1        | 1 if the output stream carries RGBA8 per pixel, 0 if it carries RGB8 with alpha discarded after blending. |
-| FIFO_DEPTH_LOG2  | 15:8   | ro              | 0x0b       | Per-layer input FIFO depth in BEATS, as a power of two. A layer wider than PPC * 2**this cannot be guaranteed free of underflow, because a window at x = 0 gets no head start within the output line. |
-| NUM_LAYERS       | 7:0    | ro              | 0x04       | Number of layer input streams this build instantiates. |
+| PPC              | 31:24  | ro              | 0x00       | Pixels per beat on every stream, 1, 2, 4 or 8. Also the horizontal alignment granularity: CANVAS.WIDTH, Ln_POS.X and Ln_SIZE.WIDTH must all be multiples of this, and a write that is not is rejected with ERR.CFG rather than rounded. Read it before computing a layout. |
+| CH_W             | 23:17  | ro              | 0x0        | Colour component width in bits: 8, 10, 12 or 16. A pixel is four components, 4*CH_W bits, packed {R, G, B, A} with R in the most significant and alpha in the least. Read this before unpacking TDATA -- it is the only thing that says where the component boundaries are. |
+| OUT_HAS_ALPHA    | 16     | ro              | 0x0        | 1 if the output stream carries RGBA per pixel, 0 if it carries RGB with alpha discarded after blending. |
+| FIFO_DEPTH_LOG2  | 15:8   | ro              | 0x00       | Per-layer input FIFO depth in BEATS, as a power of two. A layer wider than PPC * 2**this cannot be guaranteed free of underflow, because a window at x = 0 gets no head start within the output line. |
+| NUM_LAYERS       | 7:0    | ro              | 0x00       | Number of layer input streams this build instantiates, 1 to 8. The top level brings out 8 sets of stream ports regardless; the ones at or above this index are not implemented and hold their TREADY low, and their L<i>_* registers read as zero. |
 
 Back to [Register map](#register-map-summary).
 
@@ -163,8 +179,8 @@ Reset value: 0x00000000
 
 | Name             | Bits   | Mode            | Reset      | Description |
 | :---             | :---   | :---            | :---       | :---        |
-| -                | 31:20  | -               | 0x000      | Reserved |
-| LAYER_ARMED      | 19:16  | ro              | 0x0        | One bit per layer: 1 once that layer has seen its input SOF and is delivering pixels. A layer that stays 0 is not receiving a stream. |
+| -                | 31:24  | -               | 0x00       | Reserved |
+| LAYER_ARMED      | 23:16  | ro              | 0x00       | One bit per layer: 1 once that layer has seen its input SOF and is delivering pixels. A layer that stays 0 is not receiving a stream. |
 | -                | 15:2   | -               | 0x000      | Reserved |
 | FRAME_ACTIVE     | 1      | ro              | 0x0        | 1 while the output is mid-frame (between SOF and the last pixel of the last line). |
 | ERR_ANY          | 0      | ro              | 0x0        | 1 while any bit in ERR is set. Lets a polling loop check one register instead of two. |
@@ -217,7 +233,11 @@ Reset value: 0x00000000
 
 | Name             | Bits   | Mode            | Reset      | Description |
 | :---             | :---   | :---            | :---       | :---        |
-| -                | 31:4   | -               | 0x0000000  | Reserved |
+| -                | 31:8   | -               | 0x000000   | Reserved |
+| L7               | 7      | rw1c            | 0x0        | Layer 7 has latched a starve, geometry or overflow fault. |
+| L6               | 6      | rw1c            | 0x0        | Layer 6 has latched a starve, geometry or overflow fault. |
+| L5               | 5      | rw1c            | 0x0        | Layer 5 has latched a starve, geometry or overflow fault. |
+| L4               | 4      | rw1c            | 0x0        | Layer 4 has latched a starve, geometry or overflow fault. |
 | L3               | 3      | rw1c            | 0x0        | Layer 3 has latched a starve, geometry or overflow fault. |
 | L2               | 2      | rw1c            | 0x0        | Layer 2 has latched a starve, geometry or overflow fault. |
 | L1               | 1      | rw1c            | 0x0        | Layer 1 has latched a starve, geometry or overflow fault. |
@@ -554,6 +574,314 @@ Back to [Register map](#register-map-summary).
 Layer 3 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER.
 
 Address offset: 0x07c
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| FIFO_LEVEL       | 31:16  | ro              | 0x0000     | Current occupancy of this layer's input FIFO, in pixels. A level pinned at 0 means the source is too slow; pinned at full means the source is ahead and being backpressured, which is healthy. |
+| -                | 15:3   | -               | 0x000      | Reserved |
+| CFG_BAD          | 2      | ro              | 0x0        | 1 while this layer's window is rejected as out of bounds or zero-sized. The layer contributes nothing while this is set. |
+| DROPPED          | 1      | ro              | 0x0        | 1 while the layer is being skipped for the rest of the current frame, after a starve or geometry fault. |
+| ARMED            | 0      | ro              | 0x0        | 1 once the layer has seen its input SOF and is streaming. |
+
+Back to [Register map](#register-map-summary).
+
+## L4_CTRL
+
+Layer 4 enable and alpha. Takes effect at the next output frame boundary.
+
+Address offset: 0x080
+
+Reset value: 0x0000ff00
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| -                | 31:17  | -               | 0x000      | Reserved |
+| ALPHA_SRC        | 16     | rw              | 0x0        | Where this layer's alpha comes from. |
+| ALPHA            | 15:8   | rw              | 0xff       | Global alpha, 0 transparent to 255 opaque. Multiplied into each pixel's own alpha unless ALPHA_SRC selects otherwise. |
+| -                | 7:1    | -               | 0x0        | Reserved |
+| EN               | 0      | rw              | 0x0        | Enable this layer. Layer 4. Layers composite bottom-up in port order, so layer 0 is nearest the background and the highest-numbered enabled layer is on top. |
+
+Enumerated values for L4_CTRL.ALPHA_SRC.
+
+| Name             | Value   | Description |
+| :---             | :---    | :---        |
+| PIXEL_X_GLOBAL   | 0x0    | Per-pixel alpha from TDATA multiplied by ALPHA. The usual choice. |
+| GLOBAL_ONLY      | 0x1    | Ignore the pixel's alpha channel and use ALPHA alone. Use for a source that leaves its alpha byte undefined. |
+
+Back to [Register map](#register-map-summary).
+
+## L4_POS
+
+Layer 4 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears.
+
+Address offset: 0x084
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| Y                | 31:16  | rw              | 0x0000     | Top edge, 0 is the topmost canvas line. |
+| X                | 15:0   | rw              | 0x0000     | Left edge, 0 is the leftmost canvas pixel. |
+
+Back to [Register map](#register-map-summary).
+
+## L4_SIZE
+
+Layer 4 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped.
+
+Address offset: 0x088
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| HEIGHT           | 31:16  | rw              | 0x0000     | Height in lines. Must be non-zero and Y+HEIGHT must not exceed the canvas height. |
+| WIDTH            | 15:0   | rw              | 0x0000     | Width in pixels. Must be non-zero and X+WIDTH must not exceed the canvas width. |
+
+Back to [Register map](#register-map-summary).
+
+## L4_STATUS
+
+Layer 4 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER.
+
+Address offset: 0x08c
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| FIFO_LEVEL       | 31:16  | ro              | 0x0000     | Current occupancy of this layer's input FIFO, in pixels. A level pinned at 0 means the source is too slow; pinned at full means the source is ahead and being backpressured, which is healthy. |
+| -                | 15:3   | -               | 0x000      | Reserved |
+| CFG_BAD          | 2      | ro              | 0x0        | 1 while this layer's window is rejected as out of bounds or zero-sized. The layer contributes nothing while this is set. |
+| DROPPED          | 1      | ro              | 0x0        | 1 while the layer is being skipped for the rest of the current frame, after a starve or geometry fault. |
+| ARMED            | 0      | ro              | 0x0        | 1 once the layer has seen its input SOF and is streaming. |
+
+Back to [Register map](#register-map-summary).
+
+## L5_CTRL
+
+Layer 5 enable and alpha. Takes effect at the next output frame boundary.
+
+Address offset: 0x090
+
+Reset value: 0x0000ff00
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| -                | 31:17  | -               | 0x000      | Reserved |
+| ALPHA_SRC        | 16     | rw              | 0x0        | Where this layer's alpha comes from. |
+| ALPHA            | 15:8   | rw              | 0xff       | Global alpha, 0 transparent to 255 opaque. Multiplied into each pixel's own alpha unless ALPHA_SRC selects otherwise. |
+| -                | 7:1    | -               | 0x0        | Reserved |
+| EN               | 0      | rw              | 0x0        | Enable this layer. Layer 5. Layers composite bottom-up in port order, so layer 0 is nearest the background and the highest-numbered enabled layer is on top. |
+
+Enumerated values for L5_CTRL.ALPHA_SRC.
+
+| Name             | Value   | Description |
+| :---             | :---    | :---        |
+| PIXEL_X_GLOBAL   | 0x0    | Per-pixel alpha from TDATA multiplied by ALPHA. The usual choice. |
+| GLOBAL_ONLY      | 0x1    | Ignore the pixel's alpha channel and use ALPHA alone. Use for a source that leaves its alpha byte undefined. |
+
+Back to [Register map](#register-map-summary).
+
+## L5_POS
+
+Layer 5 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears.
+
+Address offset: 0x094
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| Y                | 31:16  | rw              | 0x0000     | Top edge, 0 is the topmost canvas line. |
+| X                | 15:0   | rw              | 0x0000     | Left edge, 0 is the leftmost canvas pixel. |
+
+Back to [Register map](#register-map-summary).
+
+## L5_SIZE
+
+Layer 5 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped.
+
+Address offset: 0x098
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| HEIGHT           | 31:16  | rw              | 0x0000     | Height in lines. Must be non-zero and Y+HEIGHT must not exceed the canvas height. |
+| WIDTH            | 15:0   | rw              | 0x0000     | Width in pixels. Must be non-zero and X+WIDTH must not exceed the canvas width. |
+
+Back to [Register map](#register-map-summary).
+
+## L5_STATUS
+
+Layer 5 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER.
+
+Address offset: 0x09c
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| FIFO_LEVEL       | 31:16  | ro              | 0x0000     | Current occupancy of this layer's input FIFO, in pixels. A level pinned at 0 means the source is too slow; pinned at full means the source is ahead and being backpressured, which is healthy. |
+| -                | 15:3   | -               | 0x000      | Reserved |
+| CFG_BAD          | 2      | ro              | 0x0        | 1 while this layer's window is rejected as out of bounds or zero-sized. The layer contributes nothing while this is set. |
+| DROPPED          | 1      | ro              | 0x0        | 1 while the layer is being skipped for the rest of the current frame, after a starve or geometry fault. |
+| ARMED            | 0      | ro              | 0x0        | 1 once the layer has seen its input SOF and is streaming. |
+
+Back to [Register map](#register-map-summary).
+
+## L6_CTRL
+
+Layer 6 enable and alpha. Takes effect at the next output frame boundary.
+
+Address offset: 0x0a0
+
+Reset value: 0x0000ff00
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| -                | 31:17  | -               | 0x000      | Reserved |
+| ALPHA_SRC        | 16     | rw              | 0x0        | Where this layer's alpha comes from. |
+| ALPHA            | 15:8   | rw              | 0xff       | Global alpha, 0 transparent to 255 opaque. Multiplied into each pixel's own alpha unless ALPHA_SRC selects otherwise. |
+| -                | 7:1    | -               | 0x0        | Reserved |
+| EN               | 0      | rw              | 0x0        | Enable this layer. Layer 6. Layers composite bottom-up in port order, so layer 0 is nearest the background and the highest-numbered enabled layer is on top. |
+
+Enumerated values for L6_CTRL.ALPHA_SRC.
+
+| Name             | Value   | Description |
+| :---             | :---    | :---        |
+| PIXEL_X_GLOBAL   | 0x0    | Per-pixel alpha from TDATA multiplied by ALPHA. The usual choice. |
+| GLOBAL_ONLY      | 0x1    | Ignore the pixel's alpha channel and use ALPHA alone. Use for a source that leaves its alpha byte undefined. |
+
+Back to [Register map](#register-map-summary).
+
+## L6_POS
+
+Layer 6 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears.
+
+Address offset: 0x0a4
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| Y                | 31:16  | rw              | 0x0000     | Top edge, 0 is the topmost canvas line. |
+| X                | 15:0   | rw              | 0x0000     | Left edge, 0 is the leftmost canvas pixel. |
+
+Back to [Register map](#register-map-summary).
+
+## L6_SIZE
+
+Layer 6 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped.
+
+Address offset: 0x0a8
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| HEIGHT           | 31:16  | rw              | 0x0000     | Height in lines. Must be non-zero and Y+HEIGHT must not exceed the canvas height. |
+| WIDTH            | 15:0   | rw              | 0x0000     | Width in pixels. Must be non-zero and X+WIDTH must not exceed the canvas width. |
+
+Back to [Register map](#register-map-summary).
+
+## L6_STATUS
+
+Layer 6 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER.
+
+Address offset: 0x0ac
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| FIFO_LEVEL       | 31:16  | ro              | 0x0000     | Current occupancy of this layer's input FIFO, in pixels. A level pinned at 0 means the source is too slow; pinned at full means the source is ahead and being backpressured, which is healthy. |
+| -                | 15:3   | -               | 0x000      | Reserved |
+| CFG_BAD          | 2      | ro              | 0x0        | 1 while this layer's window is rejected as out of bounds or zero-sized. The layer contributes nothing while this is set. |
+| DROPPED          | 1      | ro              | 0x0        | 1 while the layer is being skipped for the rest of the current frame, after a starve or geometry fault. |
+| ARMED            | 0      | ro              | 0x0        | 1 once the layer has seen its input SOF and is streaming. |
+
+Back to [Register map](#register-map-summary).
+
+## L7_CTRL
+
+Layer 7 enable and alpha. Takes effect at the next output frame boundary.
+
+Address offset: 0x0b0
+
+Reset value: 0x0000ff00
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| -                | 31:17  | -               | 0x000      | Reserved |
+| ALPHA_SRC        | 16     | rw              | 0x0        | Where this layer's alpha comes from. |
+| ALPHA            | 15:8   | rw              | 0xff       | Global alpha, 0 transparent to 255 opaque. Multiplied into each pixel's own alpha unless ALPHA_SRC selects otherwise. |
+| -                | 7:1    | -               | 0x0        | Reserved |
+| EN               | 0      | rw              | 0x0        | Enable this layer. Layer 7. Layers composite bottom-up in port order, so layer 0 is nearest the background and the highest-numbered enabled layer is on top. |
+
+Enumerated values for L7_CTRL.ALPHA_SRC.
+
+| Name             | Value   | Description |
+| :---             | :---    | :---        |
+| PIXEL_X_GLOBAL   | 0x0    | Per-pixel alpha from TDATA multiplied by ALPHA. The usual choice. |
+| GLOBAL_ONLY      | 0x1    | Ignore the pixel's alpha channel and use ALPHA alone. Use for a source that leaves its alpha byte undefined. |
+
+Back to [Register map](#register-map-summary).
+
+## L7_POS
+
+Layer 7 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears.
+
+Address offset: 0x0b4
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| Y                | 31:16  | rw              | 0x0000     | Top edge, 0 is the topmost canvas line. |
+| X                | 15:0   | rw              | 0x0000     | Left edge, 0 is the leftmost canvas pixel. |
+
+Back to [Register map](#register-map-summary).
+
+## L7_SIZE
+
+Layer 7 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped.
+
+Address offset: 0x0b8
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| HEIGHT           | 31:16  | rw              | 0x0000     | Height in lines. Must be non-zero and Y+HEIGHT must not exceed the canvas height. |
+| WIDTH            | 15:0   | rw              | 0x0000     | Width in pixels. Must be non-zero and X+WIDTH must not exceed the canvas width. |
+
+Back to [Register map](#register-map-summary).
+
+## L7_STATUS
+
+Layer 7 live state. Read-only, not latched -- for the latched history see ERR and ERR_LAYER.
+
+Address offset: 0x0bc
 
 Reset value: 0x00000000
 

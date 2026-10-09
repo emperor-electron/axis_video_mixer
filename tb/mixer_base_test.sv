@@ -212,10 +212,23 @@ task mixer_base_test::configure_common();
                                id[31:16]))
   end
 
+  // CAPS is driven from the RTL parameters rather than baked into the register
+  // map, so these three are the check that the map and the build agree -- the
+  // check that used to be an elaboration-time assertion against a constant.
+  // Software sizes its layer loop and unpacks TDATA from exactly these fields,
+  // so a wrong one is a wrong picture in software with correct hardware.
   reg_read(REG_CAPS, caps);
   if (caps[7:0] !== num_layers[7:0]) begin
     `uvm_error("CAPS", $sformatf("CAPS.NUM_LAYERS=%0d but the testbench built %0d layers",
                                  caps[7:0], num_layers))
+  end
+  if (caps[31:24] !== 8'(MIX_PPC)) begin
+    `uvm_error("CAPS", $sformatf("CAPS.PPC=%0d but the testbench built PPC=%0d",
+                                 caps[31:24], MIX_PPC))
+  end
+  if (caps[23:17] !== 7'(MIX_CH_W)) begin
+    `uvm_error("CAPS", $sformatf("CAPS.CH_W=%0d but the testbench built CH_W=%0d",
+                                 caps[23:17], MIX_CH_W))
   end
 
   // Scratch proves both directions of the data path before anything that

@@ -55,7 +55,7 @@ $(UNITS): tools
 # clean, and enough to catch the great majority of RTL mistakes: what it leaves
 # out is the k-induction runs, the deep BMC, and the cover tasks.
 quick: tools
-	@$(SBY) -f fv_blend.sby div scale blend
+	@$(SBY) -f fv_blend.sby div8 scale8 blend8
 	@$(SBY) -f fv_fifo.sby bmc
 	@$(SBY) -f fv_layer.sby bmc
 	@$(SBY) -f fv_core.sby bmc

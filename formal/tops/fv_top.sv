@@ -16,11 +16,16 @@
 //             than producing a wrong picture, which makes it both more serious
 //             and harder to attribute. See props/fv_axil_props.sv.
 //
-//             Wiring bugs at the flattening boundary. Unpacked array ports do
-//             not survive an IP-XACT or block design boundary, so the top
-//             flattens per-layer arrays into one wide vector per field. A
-//             transposed index there gives layer 1 layer 0's stream, which
-//             looks like a plausible picture. a_unflatten below is the check.
+//             Wiring bugs at the stream boundary. The top level brings out a
+//             named port per signal per stream -- eight streams, nothing
+//             packed -- and gathers them into the arrays the datapath indexes.
+//             That gathering is eight hand-written assigns per field, which is
+//             exactly the shape of code a transposed index survives: give
+//             layer 1 layer 0's stream and the result is a plausible picture,
+//             two windows in the right places showing the wrong contents, and
+//             a single-source bring-up test cannot see it at all. a_wire_*
+//             below is the check, and it is why this file enumerates the
+//             port names a second time.
 //
 //           The datapath properties are NOT re-run here: fv_core.sby covers
 //           them with the configuration free, which is a strictly harsher
@@ -32,12 +37,11 @@
 module fv_top
   import axis_video_mixer_pkg::*;
 #(
-    // Four, not two. The generated register map is built for four layers and
-    // axis_video_mixer_csr refuses to elaborate against any other count -- a
-    // build whose parameter disagreed with the map would silently leave layers
-    // unwired, so it stops instead. The datapath proofs shrink the layer count
-    // to keep the solver's work down; this one cannot, and does not need to,
-    // because nothing here scales with it.
+    // Four by default, and eight in the wire task. The register map is
+    // generated for MAX_LAYERS and the adapter accepts anything up to it, so
+    // unlike the old four-layer-only map this is now a free choice -- which is
+    // itself worth proving at both ends, because the tie-off of the streams a
+    // build does not implement only exists when P_NUM_LAYERS < MAX_LAYERS.
     parameter int P_NUM_LAYERS = 4,
     // Two beats, the minimum the top level's own elaboration check allows.
     // Nothing in this file is about buffering.
@@ -52,10 +56,17 @@ module fv_top
     // rather than reporting an induction failure that says nothing about the
     // design.
     parameter bit FV_CHECK_BOUNDED = 1'b1,
+    // Component width. Nothing in this file is about pixel values -- the
+    // datapath proofs own those -- so it only has to be a legal width for the
+    // DUT to elaborate. The wire properties below compare whole beats, so they
+    // are the one place it matters, and they hold at any width.
+    parameter int P_CH_W = 8,
     // Derived; do not override.
-    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? PX_W : RGB_W,
+    parameter int P_PX_W = 4 * P_CH_W,
+    parameter int P_RGB_W = 3 * P_CH_W,
+    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? P_PX_W : P_RGB_W,
     parameter int P_OUT_W = P_PPC * P_PX_OUT_W,
-    parameter int P_BEAT_W = P_PPC * PX_W
+    parameter int P_BEAT_W = P_PPC * P_PX_W
 ) (
     input logic clk,
 
@@ -73,11 +84,49 @@ module fv_top
     input logic                     s_axil_arvalid,
     input logic                     s_axil_rready,
 
-    // Free sources, flattened as the port list has them.
-    input logic [         P_NUM_LAYERS-1:0] s_axis_tvalid,
-    input logic [P_NUM_LAYERS*P_BEAT_W-1:0] s_axis_tdata,
-    input logic [         P_NUM_LAYERS-1:0] s_axis_tuser,
-    input logic [         P_NUM_LAYERS-1:0] s_axis_tlast,
+    // Free sources. One named port per signal per stream, all MAX_LAYERS of
+    // them, exactly as the top level presents them -- including the ones a
+    // build with fewer layers does not implement, because "an unimplemented
+    // stream is backpressured and ignored" is one of the properties below.
+    input logic                s_axis0_tvalid,
+    input logic [P_BEAT_W-1:0] s_axis0_tdata,
+    input logic                s_axis0_tuser,
+    input logic                s_axis0_tlast,
+
+    input logic                s_axis1_tvalid,
+    input logic [P_BEAT_W-1:0] s_axis1_tdata,
+    input logic                s_axis1_tuser,
+    input logic                s_axis1_tlast,
+
+    input logic                s_axis2_tvalid,
+    input logic [P_BEAT_W-1:0] s_axis2_tdata,
+    input logic                s_axis2_tuser,
+    input logic                s_axis2_tlast,
+
+    input logic                s_axis3_tvalid,
+    input logic [P_BEAT_W-1:0] s_axis3_tdata,
+    input logic                s_axis3_tuser,
+    input logic                s_axis3_tlast,
+
+    input logic                s_axis4_tvalid,
+    input logic [P_BEAT_W-1:0] s_axis4_tdata,
+    input logic                s_axis4_tuser,
+    input logic                s_axis4_tlast,
+
+    input logic                s_axis5_tvalid,
+    input logic [P_BEAT_W-1:0] s_axis5_tdata,
+    input logic                s_axis5_tuser,
+    input logic                s_axis5_tlast,
+
+    input logic                s_axis6_tvalid,
+    input logic [P_BEAT_W-1:0] s_axis6_tdata,
+    input logic                s_axis6_tuser,
+    input logic                s_axis6_tlast,
+
+    input logic                s_axis7_tvalid,
+    input logic [P_BEAT_W-1:0] s_axis7_tdata,
+    input logic                s_axis7_tuser,
+    input logic                s_axis7_tlast,
 
     // Free sink.
     input logic m_axis_tready
@@ -93,7 +142,14 @@ module fv_top
   logic s_axil_awready, s_axil_wready, s_axil_bvalid, s_axil_arready, s_axil_rvalid;
   logic [1:0] s_axil_bresp, s_axil_rresp;
   logic [31:0] s_axil_rdata;
-  logic [P_NUM_LAYERS-1:0] s_axis_tready;
+  logic s_axis0_tready;
+  logic s_axis1_tready;
+  logic s_axis2_tready;
+  logic s_axis3_tready;
+  logic s_axis4_tready;
+  logic s_axis5_tready;
+  logic s_axis6_tready;
+  logic s_axis7_tready;
   logic m_axis_tvalid, m_axis_tuser, m_axis_tlast;
   logic [P_OUT_W-1:0] m_axis_tdata;
   logic irq;
@@ -103,6 +159,7 @@ module fv_top
       .P_FIFO_DEPTH   (P_FIFO_DEPTH),
       .P_OUT_HAS_ALPHA(P_OUT_HAS_ALPHA),
       .P_PPC          (P_PPC),
+      .P_CH_W         (P_CH_W),
       .P_AXIL_ADDR_W  (P_AXIL_ADDR_W)
   ) dut (
       .clk  (clk),
@@ -128,11 +185,53 @@ module fv_top
       .s_axil_rvalid (s_axil_rvalid),
       .s_axil_rready (s_axil_rready),
 
-      .s_axis_tvalid(s_axis_tvalid),
-      .s_axis_tready(s_axis_tready),
-      .s_axis_tdata (s_axis_tdata),
-      .s_axis_tuser (s_axis_tuser),
-      .s_axis_tlast (s_axis_tlast),
+      .s_axis0_tvalid(s_axis0_tvalid),
+      .s_axis0_tready(s_axis0_tready),
+      .s_axis0_tdata (s_axis0_tdata),
+      .s_axis0_tuser (s_axis0_tuser),
+      .s_axis0_tlast (s_axis0_tlast),
+
+      .s_axis1_tvalid(s_axis1_tvalid),
+      .s_axis1_tready(s_axis1_tready),
+      .s_axis1_tdata (s_axis1_tdata),
+      .s_axis1_tuser (s_axis1_tuser),
+      .s_axis1_tlast (s_axis1_tlast),
+
+      .s_axis2_tvalid(s_axis2_tvalid),
+      .s_axis2_tready(s_axis2_tready),
+      .s_axis2_tdata (s_axis2_tdata),
+      .s_axis2_tuser (s_axis2_tuser),
+      .s_axis2_tlast (s_axis2_tlast),
+
+      .s_axis3_tvalid(s_axis3_tvalid),
+      .s_axis3_tready(s_axis3_tready),
+      .s_axis3_tdata (s_axis3_tdata),
+      .s_axis3_tuser (s_axis3_tuser),
+      .s_axis3_tlast (s_axis3_tlast),
+
+      .s_axis4_tvalid(s_axis4_tvalid),
+      .s_axis4_tready(s_axis4_tready),
+      .s_axis4_tdata (s_axis4_tdata),
+      .s_axis4_tuser (s_axis4_tuser),
+      .s_axis4_tlast (s_axis4_tlast),
+
+      .s_axis5_tvalid(s_axis5_tvalid),
+      .s_axis5_tready(s_axis5_tready),
+      .s_axis5_tdata (s_axis5_tdata),
+      .s_axis5_tuser (s_axis5_tuser),
+      .s_axis5_tlast (s_axis5_tlast),
+
+      .s_axis6_tvalid(s_axis6_tvalid),
+      .s_axis6_tready(s_axis6_tready),
+      .s_axis6_tdata (s_axis6_tdata),
+      .s_axis6_tuser (s_axis6_tuser),
+      .s_axis6_tlast (s_axis6_tlast),
+
+      .s_axis7_tvalid(s_axis7_tvalid),
+      .s_axis7_tready(s_axis7_tready),
+      .s_axis7_tdata (s_axis7_tdata),
+      .s_axis7_tuser (s_axis7_tuser),
+      .s_axis7_tlast (s_axis7_tlast),
 
       .m_axis_tvalid(m_axis_tvalid),
       .m_axis_tready(m_axis_tready),
@@ -144,25 +243,102 @@ module fv_top
   );
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  // The flattening boundary
+  // The stream boundary
   //
-  // Layer i must occupy bit i of the handshake vectors and
-  // TDATA[(i+1)*P_BEAT_W-1 : i*P_BEAT_W], and nothing else. A transposed index
-  // here gives layer 1 layer 0's stream, which composites into a picture that
-  // looks entirely plausible -- two windows in the right places showing the
-  // wrong contents -- and which a single-source bring-up test cannot see at
-  // all.
+  // Stream i's five named ports must reach layer i of the datapath and nothing
+  // else. A transposed index in the top level's gather gives layer 1 layer 0's
+  // stream, which composites into a picture that looks entirely plausible --
+  // two windows in the right places showing the wrong contents -- and which a
+  // single-source bring-up test cannot see at all.
   //
   // Checked against what the core actually receives, through a hierarchical
-  // reference, rather than against a second copy of the same slicing
-  // expression.
+  // reference. That is what makes this more than two copies of the same list
+  // agreeing with each other: the right-hand side is the port, the left-hand
+  // side is the signal arriving at the layer instance, and everything the top
+  // level does in between is under test. The enumeration below is this file's
+  // own, written out a second time on purpose.
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_unflatten
+  logic [MAX_LAYERS-1:0] fv_tvalid;
+  logic [MAX_LAYERS-1:0] fv_tuser;
+  logic [MAX_LAYERS-1:0] fv_tlast;
+  logic [MAX_LAYERS-1:0] fv_tready;
+  logic [  P_BEAT_W-1:0] fv_tdata [MAX_LAYERS];
+
+  assign fv_tvalid = {
+    s_axis7_tvalid,
+    s_axis6_tvalid,
+    s_axis5_tvalid,
+    s_axis4_tvalid,
+    s_axis3_tvalid,
+    s_axis2_tvalid,
+    s_axis1_tvalid,
+    s_axis0_tvalid
+  };
+
+  assign fv_tuser = {
+    s_axis7_tuser,
+    s_axis6_tuser,
+    s_axis5_tuser,
+    s_axis4_tuser,
+    s_axis3_tuser,
+    s_axis2_tuser,
+    s_axis1_tuser,
+    s_axis0_tuser
+  };
+
+  assign fv_tlast = {
+    s_axis7_tlast,
+    s_axis6_tlast,
+    s_axis5_tlast,
+    s_axis4_tlast,
+    s_axis3_tlast,
+    s_axis2_tlast,
+    s_axis1_tlast,
+    s_axis0_tlast
+  };
+
+  assign fv_tready = {
+    s_axis7_tready,
+    s_axis6_tready,
+    s_axis5_tready,
+    s_axis4_tready,
+    s_axis3_tready,
+    s_axis2_tready,
+    s_axis1_tready,
+    s_axis0_tready
+  };
+
+  assign fv_tdata[0] = s_axis0_tdata;
+  assign fv_tdata[1] = s_axis1_tdata;
+  assign fv_tdata[2] = s_axis2_tdata;
+  assign fv_tdata[3] = s_axis3_tdata;
+  assign fv_tdata[4] = s_axis4_tdata;
+  assign fv_tdata[5] = s_axis5_tdata;
+  assign fv_tdata[6] = s_axis6_tdata;
+  assign fv_tdata[7] = s_axis7_tdata;
+
+  for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_wire
     always_ff @(posedge clk) begin
       if (rst_n) begin
-        a_unflatten_tdata : assert (dut.s_axis_tdata_arr[gi] ==
-                                    s_axis_tdata[gi*P_BEAT_W+:P_BEAT_W]);
-        a_unflatten_ready : assert (s_axis_tready[gi] == dut.u_core.s_axis_tready[gi]);
+        a_wire_tvalid : assert (dut.u_core.s_axis_tvalid[gi] == fv_tvalid[gi]);
+        a_wire_tdata : assert (dut.u_core.s_axis_tdata[gi] == fv_tdata[gi]);
+        a_wire_tuser : assert (dut.u_core.s_axis_tuser[gi] == fv_tuser[gi]);
+        a_wire_tlast : assert (dut.u_core.s_axis_tlast[gi] == fv_tlast[gi]);
+        a_wire_tready : assert (fv_tready[gi] == dut.u_core.s_axis_tready[gi]);
+      end
+    end
+  end
+
+  // A stream this build does not implement must be backpressured for good.
+  // High would consume beats and discard them, which looks like a working
+  // connection and produces a black layer; low stalls the producer at once.
+  // Vacuous at P_NUM_LAYERS = MAX_LAYERS, so the tasks come in pairs: the
+  // default four-layer ones prove the tie-off, and the eight-layer one proves
+  // the wiring of every port the block brings out.
+  for (genvar gi = P_NUM_LAYERS; gi < MAX_LAYERS; gi++) begin : g_wire_unused
+    always_ff @(posedge clk) begin
+      if (rst_n) begin
+        a_unused_stream_stalled : assert (!fv_tready[gi]);
       end
     end
   end

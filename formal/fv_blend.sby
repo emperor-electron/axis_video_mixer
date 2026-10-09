@@ -1,43 +1,99 @@
 # ==============================================================================
-# Blend arithmetic in axis_video_mixer_pkg.
+# Blend arithmetic in axis_video_mixer_pkg, at every supported component width.
 #
-#   sby -f fv_blend.sby              every group
-#   sby -f fv_blend.sby div bound    selected groups
+#   sby -f fv_blend.sby                 every group at every width it runs at
+#   sby -f fv_blend.sby div16 bound8    selected
 #
 # Every task is a two-step BMC. The properties are combinational, the inputs
 # are free every cycle, and there is no state to unroll -- so two steps cover
 # the whole input space and a pass is an exhaustive statement over it.
 #
-# The groups exist for solver cost, not for tidiness: checked as a single query
-# the file did not discharge in ten minutes, and the two groups holding more
-# than one instance of the 8x8 multiplier (bound, mono) are where that cost
-# lives. See the header of tops/fv_blend.sv.
+# The task name is a group and a width: mono12 is the monotonicity group at
+# P_CH_W = 12. Both axes exist for solver cost, not for tidiness.
+#
+# The groups, because checked as a single query the file did not discharge in
+# ten minutes even at 8 bits.
+#
+# The widths, because the four are four independent arithmetic claims. Nothing
+# about the identity being exact at 8 bits says anything about 16, where the
+# numerator fills all 32 bits of its container and the rounding offset is
+# 32768 rather than 128. A proof at one width is not a proof at another, and
+# the mixer ships all four.
+#
+# BOUND and NUM run at 8 bits alone. They are the two groups that put two
+# multiplications with free operands into one query, which is the shape of
+# problem bit-vector solvers are worst at, and the cost climbs steeply with the
+# width: 79 s and 39 s at 8 bits, and neither discharged within five minutes at
+# 10, 12 or 16. Nor did bitwuzla, yices or z3 on the 16-bit case -- all three
+# were tried. Both groups are corollaries of DIV, which does discharge at every
+# width in seconds; the argument is written out in the header of
+# tops/fv_blend.sv, and doc/formal.md section 4 says what that leaves open.
 # ==============================================================================
 
 [tasks]
-div
-scale
-blend
-bound
-mono
-cover
+div8     prove_q
+div10    prove_q
+div12    prove_q
+div16    prove_q
+scale8   prove_q
+scale10  prove_q
+scale12  prove_q
+scale16  prove_q
+blend8   prove_q
+blend10  prove_q
+blend12  prove_q
+blend16  prove_q
+mono8    prove_q
+mono10   prove_q
+mono12   prove_q
+mono16   prove_q
+up8      prove_q
+up10     prove_q
+up12     prove_q
+up16     prove_q
+bound8   prove_q
+num8     prove_q
+cover8   cover_q
+cover10  cover_q
+cover12  cover_q
+cover16  cover_q
 
 [options]
 depth 2
-~cover: mode bmc
-cover: mode cover
+prove_q: mode bmc
+cover_q: mode cover
 
 [engines]
 smtbmc boolector
 
 [script]
 plugin -i slang
-div:   read_slang --top fv_blend -G FV_GROUP=1 axis_video_mixer_pkg.sv fv_blend.sv
-scale: read_slang --top fv_blend -G FV_GROUP=2 axis_video_mixer_pkg.sv fv_blend.sv
-blend: read_slang --top fv_blend -G FV_GROUP=3 axis_video_mixer_pkg.sv fv_blend.sv
-bound: read_slang --top fv_blend -G FV_GROUP=4 axis_video_mixer_pkg.sv fv_blend.sv
-mono:  read_slang --top fv_blend -G FV_GROUP=5 axis_video_mixer_pkg.sv fv_blend.sv
-cover: read_slang --top fv_blend -G FV_GROUP=0 axis_video_mixer_pkg.sv fv_blend.sv
+div8:     read_slang --top fv_blend -G FV_GROUP=1 -G FV_CH_W=8  axis_video_mixer_pkg.sv fv_blend.sv
+div10:    read_slang --top fv_blend -G FV_GROUP=1 -G FV_CH_W=10 axis_video_mixer_pkg.sv fv_blend.sv
+div12:    read_slang --top fv_blend -G FV_GROUP=1 -G FV_CH_W=12 axis_video_mixer_pkg.sv fv_blend.sv
+div16:    read_slang --top fv_blend -G FV_GROUP=1 -G FV_CH_W=16 axis_video_mixer_pkg.sv fv_blend.sv
+scale8:   read_slang --top fv_blend -G FV_GROUP=2 -G FV_CH_W=8  axis_video_mixer_pkg.sv fv_blend.sv
+scale10:  read_slang --top fv_blend -G FV_GROUP=2 -G FV_CH_W=10 axis_video_mixer_pkg.sv fv_blend.sv
+scale12:  read_slang --top fv_blend -G FV_GROUP=2 -G FV_CH_W=12 axis_video_mixer_pkg.sv fv_blend.sv
+scale16:  read_slang --top fv_blend -G FV_GROUP=2 -G FV_CH_W=16 axis_video_mixer_pkg.sv fv_blend.sv
+blend8:   read_slang --top fv_blend -G FV_GROUP=3 -G FV_CH_W=8  axis_video_mixer_pkg.sv fv_blend.sv
+blend10:  read_slang --top fv_blend -G FV_GROUP=3 -G FV_CH_W=10 axis_video_mixer_pkg.sv fv_blend.sv
+blend12:  read_slang --top fv_blend -G FV_GROUP=3 -G FV_CH_W=12 axis_video_mixer_pkg.sv fv_blend.sv
+blend16:  read_slang --top fv_blend -G FV_GROUP=3 -G FV_CH_W=16 axis_video_mixer_pkg.sv fv_blend.sv
+mono8:    read_slang --top fv_blend -G FV_GROUP=5 -G FV_CH_W=8  axis_video_mixer_pkg.sv fv_blend.sv
+mono10:   read_slang --top fv_blend -G FV_GROUP=5 -G FV_CH_W=10 axis_video_mixer_pkg.sv fv_blend.sv
+mono12:   read_slang --top fv_blend -G FV_GROUP=5 -G FV_CH_W=12 axis_video_mixer_pkg.sv fv_blend.sv
+mono16:   read_slang --top fv_blend -G FV_GROUP=5 -G FV_CH_W=16 axis_video_mixer_pkg.sv fv_blend.sv
+up8:      read_slang --top fv_blend -G FV_GROUP=6 -G FV_CH_W=8  axis_video_mixer_pkg.sv fv_blend.sv
+up10:     read_slang --top fv_blend -G FV_GROUP=6 -G FV_CH_W=10 axis_video_mixer_pkg.sv fv_blend.sv
+up12:     read_slang --top fv_blend -G FV_GROUP=6 -G FV_CH_W=12 axis_video_mixer_pkg.sv fv_blend.sv
+up16:     read_slang --top fv_blend -G FV_GROUP=6 -G FV_CH_W=16 axis_video_mixer_pkg.sv fv_blend.sv
+bound8:   read_slang --top fv_blend -G FV_GROUP=4 -G FV_CH_W=8  axis_video_mixer_pkg.sv fv_blend.sv
+num8:     read_slang --top fv_blend -G FV_GROUP=7 -G FV_CH_W=8  axis_video_mixer_pkg.sv fv_blend.sv
+cover8:   read_slang --top fv_blend -G FV_GROUP=0 -G FV_CH_W=8  axis_video_mixer_pkg.sv fv_blend.sv
+cover10:  read_slang --top fv_blend -G FV_GROUP=0 -G FV_CH_W=10 axis_video_mixer_pkg.sv fv_blend.sv
+cover12:  read_slang --top fv_blend -G FV_GROUP=0 -G FV_CH_W=12 axis_video_mixer_pkg.sv fv_blend.sv
+cover16:  read_slang --top fv_blend -G FV_GROUP=0 -G FV_CH_W=16 axis_video_mixer_pkg.sv fv_blend.sv
 prep -top fv_blend
 
 [files]

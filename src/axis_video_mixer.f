@@ -9,7 +9,11 @@
 #
 # The two files under generated/ come from regs/gen_regs.py and corsair. Do not
 # edit them; regenerate with
-#     cd regs && ./gen_regs.py -n <layers> && corsair -r regs.json -c csrconfig
+#     cd regs && ./gen_regs.py && corsair -r regs.json -c csrconfig
+#
+# They do not depend on P_NUM_LAYERS, P_PPC or P_CH_W: the map is generated for
+# the maximum layer count and CAPS reports what a build actually instantiates,
+# so one set of generated files serves every configuration.
 # ==============================================================================
 
 ${AXIS_VIDEO_MIXER_ROOT}/src/axis_video_mixer_pkg.sv

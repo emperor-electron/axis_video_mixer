@@ -15,17 +15,19 @@
 #   TEST, SEED, UVM_VERBOSITY, WAVES, PLUSARGS, VIVADO_PATH
 #   CANVAS_W, CANVAS_H, NUM_LAYERS, FIFO_DEPTH
 #   PPC                pixels per beat: 1, 2, 4 or 8
+#   CH_W               colour component width: 8, 10, 12 or 16
+#   NUM_LAYERS         layer input streams: 1 to 8
 #
-# PPC is a compile-time define, not a generic, because the link width the UVC
-# is specialised on follows from it -- so changing it rebuilds rather than just
-# re-elaborates. The snapshot name carries it for the same reason the canvas
-# size is carried: so switching does not silently reuse the other one's build.
+# PPC and CH_W are compile-time defines, not generics, because the link width
+# the UVC is specialised on follows from both -- so changing either rebuilds
+# rather than just re-elaborates. The snapshot name carries them for the same
+# reason the canvas size is carried: so switching does not silently reuse the
+# other one's build.
 #
-# PPC > 1 also needs the register map regenerated, because CAPS.PPC is a
-# constant in it and the CSR refuses a build that disagrees. `make ppc-sweep`
-# does that for each value and restores the committed PPC=1 map afterwards;
-# `make regen-ppc` does it once, deliberately, since it rewrites checked-in
-# generated files.
+# None of the three needs the register map regenerated. CAPS reports all of
+# them from the RTL parameters, so one map describes every build -- which is
+# why `make ppc-sweep` and `make ch-sweep` below are plain regressions and not
+# the rewrite-the-generated-files dance this used to need.
 #
 # The canvas defaults to 64x8 so a frame is 512 beats and the regression runs
 # in moments. It is passed to xelab as a generic on mixer_tb_top, so nothing in
@@ -48,10 +50,10 @@ TOP             ?= mixer_tb_top
 TEST            ?= mixer_base_test
 SEED            ?= random
 UVM_VERBOSITY   ?= UVM_LOW
-SNAPSHOT        ?= $(TOP)_$(CANVAS_W)x$(CANVAS_H)_ppc$(PPC)_snap
+SNAPSHOT        ?= $(TOP)_$(CANVAS_W)x$(CANVAS_H)_ppc$(PPC)_ch$(CH_W)_snap
 
 PPC             ?= 1
-PPC             ?= 1
+CH_W            ?= 8
 CANVAS_W        ?= 64
 CANVAS_H        ?= 8
 NUM_LAYERS      ?= 4
@@ -73,7 +75,7 @@ TB_FILELIST     := filelist.f
 # SIMULATION turns on the in-RTL assertions. The generated register block has
 # no `timescale of its own, so one is supplied to xelab for the whole design;
 # without it elaboration fails outright rather than defaulting.
-XVLOG_OPTS      := -sv -L uvm -d SIMULATION -d MIX_PPC=$(PPC)
+XVLOG_OPTS      := -sv -L uvm -d SIMULATION -d MIX_PPC=$(PPC) -d MIX_CH_W=$(CH_W)
 XELAB_OPTS      := -L uvm -timescale 1ns/1ps --debug typical -d SIMULATION \
                    --generic_top "CANVAS_W=$(CANVAS_W)" \
                    --generic_top "CANVAS_H=$(CANVAS_H)" \
@@ -94,7 +96,7 @@ REGRESS_TESTS   := mixer_base_test \
                    mixer_geometry_error_test \
                    mixer_bad_config_test
 
-.PHONY: regen-ppc ppc-sweep all compile elab run regress full waves gui clean help
+.PHONY: ppc-sweep ch-sweep all compile elab run regress full waves gui clean help
 
 all: run
 
@@ -160,21 +162,15 @@ clean:
 	rm -rf xsim.dir *.log *.jou *.pb *.wdb *.vcd *.str xsim.covdb .Xil
 
 help:
-	@echo "targets: all compile elab run regress full waves gui clean"
+	@echo "targets: all compile elab run regress full waves gui clean ppc-sweep ch-sweep"
 	@echo "tests:"
 	@for t in $(REGRESS_TESTS); do echo "    $$t"; done
 
 
 # ------------------------------------------------------------------------------
-# Multi-pixel-per-clock
+# Parameter sweeps
 # ------------------------------------------------------------------------------
-# Regenerate the register map for PPC. Rewrites files under ../src/generated and
-# ../doc, so it is its own target rather than a dependency of `all`.
-regen-ppc:
-	cd ../regs && ./gen_regs.py -p $(PPC) && corsair -r regs.json -c csrconfig
-
-# Every supported PPC in turn, full regression at each, then put the committed
-# PPC=1 map back so the tree is left as it was found.
+# Every supported PPC in turn, full regression at each.
 #
 # The canvas is 64 wide, which is a whole number of beats at all four values --
 # the DUT rejects a canvas that is not, so a sweep that did not respect that
@@ -183,10 +179,22 @@ ppc-sweep:
 	@rc=0; \
 	for p in 1 2 4 8; do \
 	  echo "=================== PPC=$$p ==================="; \
-	  $(MAKE) --no-print-directory regen-ppc PPC=$$p >/dev/null || { rc=1; continue; }; \
 	  $(MAKE) --no-print-directory regress PPC=$$p || rc=1; \
 	done; \
-	echo "=== restoring the committed PPC=1 map ==="; \
-	$(MAKE) --no-print-directory regen-ppc PPC=1 >/dev/null; \
 	echo; echo "ppc sweep $$([ $$rc -eq 0 ] && echo PASSED || echo FAILED)"; \
+	exit $$rc
+
+# Every supported colour component width in turn.
+#
+# Worth running as its own sweep rather than folded into ppc-sweep: the two are
+# independent -- PPC changes how many pixels share a beat, CH_W changes how wide
+# a pixel is -- and crossing them would be sixteen regressions to find a fault
+# either one of them finds on its own.
+ch-sweep:
+	@rc=0; \
+	for c in 8 10 12 16; do \
+	  echo "=================== CH_W=$$c ==================="; \
+	  $(MAKE) --no-print-directory regress CH_W=$$c || rc=1; \
+	done; \
+	echo; echo "component width sweep $$([ $$rc -eq 0 ] && echo PASSED || echo FAILED)"; \
 	exit $$rc

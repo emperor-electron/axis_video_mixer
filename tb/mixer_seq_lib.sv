@@ -71,7 +71,7 @@ task mixer_layer_frame_seq::body();
 
     for (int unsigned i = 0; i < total; i++) begin
       axi_stream_seq_item beat;
-      logic [31:0] px;
+      logic [MIX_PX_W-1:0] px;
       byte unsigned bytes[];
       bit want_last, want_user;
       int unsigned bx, y;
@@ -90,14 +90,16 @@ task mixer_layer_frame_seq::body();
       want_user = (tuser_at >= 0) ? ((i == 0) || (i == int'(tuser_at))) : (i == 0);
 
       // Lane j of the beat is layer pixel bx*PPC + j, lane 0 in the low bytes.
-      bytes = new[4 * MIX_PPC];
+      // A pixel is a whole number of bytes at every supported component width
+      // -- 4, 5, 6 or 8 -- so a lane still starts on a byte boundary even when
+      // the components inside it do not.
+      bytes = new[MIX_PX_BYTES * MIX_PPC];
       for (int unsigned j = 0; j < MIX_PPC; j++) begin
         px = layer_pixel(layer, (bx * MIX_PPC) + j + content_phase, y + content_phase);
-        // tdata[0] of a lane is its TDATA[7:0], which is the alpha byte.
-        bytes[j*4 + 0] = px[7:0];
-        bytes[j*4 + 1] = px[15:8];
-        bytes[j*4 + 2] = px[23:16];
-        bytes[j*4 + 3] = px[31:24];
+        // tdata[0] of a lane is its TDATA[7:0], which is the bottom of alpha.
+        for (int unsigned k = 0; k < MIX_PX_BYTES; k++) begin
+          bytes[j*MIX_PX_BYTES + k] = px[k*8+:8];
+        end
       end
 
       d    = (max_delay > min_delay) ? ($urandom_range(max_delay, min_delay)) : min_delay;
@@ -149,18 +151,17 @@ task mixer_layer_partial_seq::body();
 
   for (int unsigned i = 0; i < beats; i++) begin
     axi_stream_seq_item beat;
-    logic [31:0] px;
+    logic [MIX_PX_W-1:0] px;
     byte unsigned bytes[];
     int unsigned bx = i % w_beats;
     int unsigned y  = i / w_beats;
 
-    bytes = new[4 * MIX_PPC];
+    bytes = new[MIX_PX_BYTES * MIX_PPC];
     for (int unsigned j = 0; j < MIX_PPC; j++) begin
       px = layer_pixel(layer, (bx * MIX_PPC) + j, y);
-      bytes[j*4 + 0] = px[7:0];
-      bytes[j*4 + 1] = px[15:8];
-      bytes[j*4 + 2] = px[23:16];
-      bytes[j*4 + 3] = px[31:24];
+      for (int unsigned k = 0; k < MIX_PX_BYTES; k++) begin
+        bytes[j*MIX_PX_BYTES + k] = px[k*8+:8];
+      end
     end
 
     beat = new_beat($sformatf("partial_l%0d_%0d", layer, i));

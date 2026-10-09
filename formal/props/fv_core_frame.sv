@@ -40,7 +40,10 @@ module fv_core_frame
     parameter int P_NUM_LAYERS = 2,
     parameter int P_PPC = 1,
     parameter bit P_OUT_HAS_ALPHA = 1'b1,
-    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? PX_W : RGB_W,
+    parameter int P_CH_W = 8,
+    parameter int P_PX_W = 4 * P_CH_W,
+    parameter int P_RGB_W = 3 * P_CH_W,
+    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? P_PX_W : P_RGB_W,
     parameter int P_OUT_W = P_PPC * P_PX_OUT_W
 ) (
     input logic clk,
@@ -49,10 +52,10 @@ module fv_core_frame
 
     input logic [15:0] act_bw,
     input logic [15:0] act_h,
-    input logic [23:0] act_bg,
+    input logic [P_RGB_W-1:0] act_bg,
     input logic                    act_ok,
     input logic [P_NUM_LAYERS-1:0] act_en,
-    input logic [             7:0] act_alpha[P_NUM_LAYERS],
+    input logic [      P_CH_W-1:0] act_alpha[P_NUM_LAYERS],
     input logic [P_NUM_LAYERS-1:0] act_asrc,
 
     input logic               m_axis_tvalid,
@@ -148,7 +151,7 @@ module fv_core_frame
   always_comb begin
     all_transparent = 1'b1;
     for (int i = 0; i < P_NUM_LAYERS; i++) begin
-      if (act_en[i] && !((act_alpha[i] == 8'd0) && (act_asrc[i] == ALPHA_GLOBAL_ONLY))) begin
+      if (act_en[i] && !((act_alpha[i] == '0) && (act_asrc[i] == ALPHA_GLOBAL_ONLY))) begin
         all_transparent = 1'b0;
       end
     end
@@ -162,8 +165,9 @@ module fv_core_frame
         // construction and two mixers can be cascaded. Without it the output
         // is bare RGB and drops into a video output stage unadapted.
         a_lane_is_background : assert (m_axis_tdata[gj*P_PX_OUT_W+:P_PX_OUT_W] ==
-                                       (P_OUT_HAS_ALPHA ? P_PX_OUT_W'({act_bg, OPAQUE}) :
-                                                          P_PX_OUT_W'(act_bg)));
+                                       (P_OUT_HAS_ALPHA ?
+                                        P_PX_OUT_W'({act_bg, {P_CH_W{1'b1}}}) :
+                                        P_PX_OUT_W'(act_bg)));
       end
     end
   end

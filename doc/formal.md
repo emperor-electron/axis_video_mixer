@@ -41,11 +41,20 @@ someone thought of. Here the solver writes every bad value there is, every
 cycle, in any combination — and the claim proved is not "the validation logic
 looks right" but "no illegal window can become active, by any path".
 
+**Stream wiring.** Each of the eight input streams is five named ports, and
+the top level gathers them into the arrays the datapath indexes — eight
+hand-written assigns per field. A transposed index there gives layer 1 layer
+0's stream, which composites into two windows in the right places showing the
+wrong contents. A bring-up test with one source cannot see it, and a bench with
+eight identical sources cannot either. §7.
+
 Two more fall out cheaply once the flow exists. The blend arithmetic
-(§4) is pure combinational logic over a small input space, where formal is
-simply the right tool and simulation never was. And the AXI4-Lite control port
-(§7) is generated code that nobody reviews line by line, where a protocol
-violation wedges a processor bus rather than producing a wrong picture.
+(§4) is pure combinational logic, where formal is simply the right tool and
+simulation never was — and with the component width now a parameter it is four
+arithmetics rather than one, only the narrowest of which simulation could ever
+have exhausted. And the AXI4-Lite control port (§7) is generated code that
+nobody reviews line by line, where a protocol violation wedges a processor bus
+rather than producing a wrong picture.
 
 ---
 
@@ -150,42 +159,87 @@ into the same expression, so a reset arriving mid-stream is still covered.
 
 `sby -f fv_blend.sby` · [`tops/fv_blend.sv`](../formal/tops/fv_blend.sv)
 
-The package comment for `div255` says the identity is "exact against
-`round(v / 255)` for every `v` in 0 .. 65025 ... Verified exhaustively." That is
-a fine thing to have done and it covers one function. It does not reach
-`blend_ch`, `blend_rgb`, `mul255` or `effective_alpha`, whose input spaces are
-2²⁴ and larger.
+The package comment for `div_max` says the identity is exact against
+`round(v / MAX)` over the whole range the blend can produce, "verified
+exhaustively". That is a fine thing to have done and it covers one function. It
+does not reach `blend_ch`, `blend_rgb`, `mul_max` or `effective_alpha`, whose
+input spaces are 2⁴⁸ and larger.
 
 Everything here is combinational and nothing is driven, so the solver picks
 every input over its full range and two BMC steps are the entire input space.
 
+The component width `P_CH_W` is a parameter — 8, 10, 12 or 16 — and the task
+name carries it: `div16` is the exactness group at 16 bits. Four widths rather
+than one because they are four independent arithmetic claims. Nothing about the
+identity holding at 8 bits says anything about 16, where the numerator fills
+all 32 bits of its container and the rounding offset is 32768 rather than 128,
+and the mixer ships all four.
+
 | Property | What it rules out |
 |---|---|
-| `a_div255_floor_lo` / `_hi` | `div255(v)` is exactly `floor((v + 127) / 255)` |
-| `a_div255_rounded` | the residual never exceeds half a divisor |
-| `a_div255_zero` / `_max` | the two endpoints the cascade depends on |
+| `a_div_floor_lo` / `_hi` | `div_max(C, v)` is exactly `floor((v + (MAX-1)/2) / MAX)` |
+| `a_div_rounded` | the residual never exceeds half a divisor |
+| `a_div_in_range` | the quotient fits in one component |
+| `a_div_zero` / `_max` | the two endpoints the cascade depends on |
 | `a_blend_alpha0` | alpha 0 returns the accumulator **bit-exactly** — this is what lets the core represent "layer absent" as alpha zero with no special case anywhere |
-| `a_blend_alpha255` | alpha 255 returns the top pixel bit-exactly — the one a `>> 8` gets wrong, and the whole reason `div255` exists |
+| `a_blend_alpha_max` | alpha at full scale returns the top pixel bit-exactly — the one a `>> C` gets wrong, and the whole reason `div_max` exists |
+| `a_rgb_per_channel` | no channel crosstalk — invisible in a greyscale test pattern, and the failure a parameterised width makes newly possible since every channel boundary now moves with `P_CH_W` |
+| `a_px_round_trip` / `a_px_alpha` | the shift-and-mask accessors name the right bits at every width |
+| `a_ea_*` | `ALPHA_SRC` decoding, and that a global alpha of zero hides a layer whichever source is selected |
 | `a_blend_bounded_lo` / `_hi` | no overshoot: a convex combination stays between its operands. An off-by-one here is a bright or dark fringe on every edge in the picture |
 | `a_blend_flat` | blending a value with itself is the identity at every alpha, so a flat region stays flat |
-| `a_rgb_per_channel` | no channel crosstalk — invisible in a greyscale test pattern |
-| `a_ea_*` | `ALPHA_SRC` decoding, and that a global alpha of zero hides a layer whichever source is selected |
+| `a_num_monotone` | the blend numerator is monotone in the top pixel |
+| `a_num_in_range` | the numerator never leaves the interval `div_max` was proved over — the discharge for the range guard the exactness group assumes |
+| `a_up_*`, `a_rgb_up_*` | the bit replication that expands the 8-bit `ALPHA` and `BACKGROUND` registers to the component width: exact at 0 and at full scale, monotone, and within one LSB of `v * MAX / 255` in between |
 
-Two things about how these are *written* mattered more than what they say.
+Three things about how these are *written* mattered more than what they say.
 
 **No division appears anywhere.** The obvious statement of exactness is
-`div255(v) == (v + 127) / 255`. It is correct and it is unusable: a bit-vector
-divide is the one operation these solvers have no good decision procedure for,
-and it did not discharge in ten minutes on its own. Stated as the pair of
-multiplicative bounds that *define* integer division — `q*255 <= v+127 <
-(q+1)*255` — it lands instantly.
+`div_max(C, v) == (v + (MAX-1)/2) / MAX`. It is correct and it is unusable: a
+bit-vector divide is the one operation these solvers have no good decision
+procedure for, and it did not discharge in ten minutes on its own. Stated as
+the pair of multiplicative bounds that *define* integer division —
+`q*MAX <= v + (MAX-1)/2 < (q+1)*MAX` — it lands instantly.
 
 **Monotonicity is proved in two pieces.** Asserted directly, "raising the top
 pixel never lowers the result" needs two whole `blend_ch` instances in one
-query and did not finish in a minute. `blend_ch` is `div255` composed with a
+query and did not finish in a minute. `blend_ch` is `div_max` composed with a
 numerator, so it is split at the seam: `a_num_monotone` for the numerator,
-`a_div255_monotone` for `div255`, and the conclusion is an ordinary syllogism
+`a_div_monotone` for `div_max`, and the conclusion is an ordinary syllogism
 rather than something the solver has to be trusted for.
+
+**Two groups do not run at every width, and it is worth being exact about what
+that leaves open.** `bound` and `num` — the last four rows of the table — are
+the two groups that put two multiplications with free operands into one query,
+which is the shape of problem bit-vector solvers are worst at. They cost 79 s
+and 39 s at 8 bits. At 10, 12 and 16 neither discharged within five minutes on
+boolector, and bitwuzla, yices and z3 did no better on the 16-bit case; all
+three were tried. So they run at 8 bits and the suite does not pretend
+otherwise.
+
+What that costs is less than the missing rows suggest. Once `div_max(C, v)` has
+been shown to be exactly `round(v / MAX)` over the whole interval
+`0 .. MAX*MAX` — which it has, at every width, in seconds — the four properties
+are corollaries about `round(·/MAX)` and integer algebra rather than separate
+facts about the hardware:
+
+| | follows from |
+|---|---|
+| no overshoot | `N - lo*MAX = (top-lo)*a + (bot-lo)*(MAX-a)`, both terms non-negative, and `round(·/MAX)` is monotone. The upper bound is the mirror image. |
+| flat | `top*a + top*(MAX-a) = top*MAX` exactly, and `round(top*MAX / MAX) = top`. |
+| numerator range | `top*a + bot*(MAX-a) <= MAX*a + MAX*(MAX-a) = MAX*MAX`. |
+
+So what the wider widths lose is a redundant machine check of that algebra, not
+the arithmetic underneath it — and `div_max` is also covered by exhaustive
+simulation at all four widths, which at 16 bits is four billion values.
+
+**One counterexample here was real and the property was what was wrong.** The
+range guard was first written as `FV_AW'(v) <= FV_MAX_NUM`, narrowing the
+numerator to the width the bounds are evaluated in. `FV_AW` is 18 bits at
+`C = 8` and `v` is a full 32-bit numerator, so a huge value passed the guard
+with its top bits truncated away and then reached `div_max` in full. `div8`
+duly reported `a_div_floor_lo` failing. The function was right; the guard had
+to compare at the container width.
 
 ---
 
@@ -373,16 +427,31 @@ that need a configuration which does not move, and so run under
   blend stages and the output packing. `fv_blend` proves the arithmetic
   identity it rests on; this proves the cascade is wired to it.
 
+  The `deep` task runs that second property again at `P_CH_W = 16`, and it is
+  a different claim rather than a repeat. At 16 bits the accumulators and
+  operands are 48 bits rather than 24, every lane boundary in the output
+  packing moves, and the background arrives through the 8-to-16-bit expansion
+  rather than as itself — so what is proved is that the expansion, the widened
+  cascade and the widened packing agree end to end.
+
 ### Sizing, and what that costs
 
 Two layers, four-beat FIFOs, `P_PPC` 1 for most tasks and 2 for the `ppc` task,
 canvas and windows bounded to a handful of pixels.
 
-Two layers rather than four is the smallest count at which the cascade is a
+Two layers rather than eight is the smallest count at which the cascade is a
 cascade and at which "layer 0 nearest the background" means anything; the
-per-layer logic is generated, so the third and fourth instances are copies of
-the second. `P_PPC` 2 is where a control signal reaching the wrong lane would
+per-layer logic is generated, so the other six instances are copies of the
+second. `P_PPC` 2 is where a control signal reaching the wrong lane would
 show, since the lanes are independent in the cascade and share only control.
+
+`P_CH_W` is 8 everywhere except the `deep` task, and that is a deliberate
+split rather than an oversight. Nothing in this file's properties looks inside
+a pixel: the raster, the window compares, the flow control, the error logic and
+the pointer arithmetic are all width-independent, and running them at 16 bits
+would widen every FIFO and every cascade register for properties that cannot
+observe a single one of those bits. The one property here that *is* about pixel
+values is the background check, and that is what `deep` runs.
 
 The geometry bound is a real restriction and worth stating plainly. A 16-bit
 canvas puts the raster comparisons beyond what the solver will finish, and the
@@ -412,16 +481,27 @@ a wrong picture.
 | `a_irq_is_masked_or` | `irq` is exactly `|(ERR & IRQ_EN)`, level sensitive. A pulse would be lost on a shared line |
 | `a_err_set_wins` | an error arriving in the same cycle as its acknowledgement is not lost — the hardware set beats the software clear, which is R8's hard part |
 | `a_err_sticky` | an `ERR` bit only ever clears because software wrote a one to it. A bit that cleared itself is a fault software never saw |
-| `a_unflatten_tdata`, `a_unflatten_ready` | layer *i* really does occupy bit *i* and `TDATA[(i+1)*W-1 : i*W]` |
+| `a_wire_tvalid`, `a_wire_tdata`, `a_wire_tuser`, `a_wire_tlast`, `a_wire_tready` | stream *i*'s five named ports really do reach layer *i* of the datapath |
+| `a_unused_stream_stalled` | a stream this build does not implement holds `TREADY` low |
 | `a_bvalid_solicited`, `a_rvalid_solicited` | no unsolicited response (bounded) |
 | `a_write_responds`, `a_read_responds` | an accepted access is answered within 2 cycles (bounded) |
 
-`a_unflatten_*` is there because unpacked array ports do not survive an IP-XACT
-or block design boundary, so the top flattens per-layer arrays into one wide
-vector per field. A transposed index there gives layer 1 layer 0's stream —
-which composites into an entirely plausible picture, two windows in the right
-places showing the wrong contents, and which a single-source bring-up test
-cannot see at all.
+`a_wire_*` is there because the top level brings out a named port per signal
+per stream — eight streams, nothing packed — and gathers them into the arrays
+the datapath indexes. That gather is eight hand-written assigns per field,
+which is exactly the shape of code a transposed index survives: give layer 1
+layer 0's stream and the result composites into an entirely plausible picture,
+two windows in the right places showing the wrong contents, which a
+single-source bring-up test cannot see at all. The check is against what the
+core instance actually receives, through a hierarchical reference, so
+everything the top level does in between is under test rather than restated.
+
+`a_unused_stream_stalled` is the other half, and it is why the default tasks
+run at four layers rather than eight: with every port wired there is no
+unimplemented stream and the property is vacuous. An unimplemented stream must
+hold `TREADY` **low** — high would consume beats and discard them, which looks
+like a working connection and produces a black layer, while low stalls the
+producer in the first second of bring-up.
 
 The datapath properties are deliberately **not** re-run at this level.
 `fv_core.sby` proves them with the configuration completely free, which is a
@@ -430,9 +510,14 @@ register block cannot produce a configuration the core has not already been
 proved to handle. What is left for this level is the control port, the
 interrupt, and the wiring between.
 
-`P_NUM_LAYERS` is four here and two in `fv_core.sby`, because the generated map
-is built for four layers and `axis_video_mixer_csr` refuses to elaborate
-against any other count.
+`P_NUM_LAYERS` is four in most tasks here and two in `fv_core.sby`, and that is
+now a choice rather than a constraint: the register map is generated for the
+maximum and the adapter accepts any count up to it. Four keeps the tie-off
+properties non-vacuous; the `wire8` task covers the other end, where every port
+the block brings out is wired to a layer. The `deep` task re-runs the same
+properties at `P_CH_W = 16`, the widest beat the block carries — the wire
+properties compare whole beats, so the width is the one thing at this level
+that they are sensitive to.
 
 ### One finding worth recording
 
@@ -489,44 +574,56 @@ reject rather than draw.
 
 ## 9. Results
 
-135 assertion statements, 49 cover statements and 15 assumptions across five
-proofs and 26 tasks. Assertions inside per-layer and per-lane generate loops
+154 assertion statements, 49 cover statements and 15 assumptions across five
+proofs and 49 tasks. Assertions inside per-layer and per-lane generate loops
 are elaborated once per instance, so the checked count is higher.
 
 ```bash
-make -C formal            # everything, about 3m45 from clean
+make -C formal            # everything, about four and three-quarter minutes from clean
 make -C formal quick      # every bmc task plus the cheap blend groups, ~30 s
 make -C formal core TASKS=prove
+make -C formal blend TASKS="div16 up16"
 ```
 
 | Unit | Tasks | Result | Wall |
 |---|---|---|---|
-| `fv_blend` | `div` `scale` `blend` `bound` `mono` `cover` | pass | ~40 s |
-| `fv_fifo` | `bmc` `prove` `order` `cover` `depth` | pass | ~10 s |
-| `fv_layer` | `bmc` `prove` `align` `watchdog` `cover` `ppc` | pass | ~10 s |
-| `fv_core` | `bmc` `prove` `ppc` `cover` | pass | ~20 s |
-| `fv_core` | `frame` `datapath` | pass | ~2 min |
-| `fv_top` | `bmc` `prove` `cover` | pass | ~20 s |
+| `fv_blend` | `div` `scale` `blend` `mono` `up` `cover`, each at 8, 10, 12 and 16 bits | pass | ~5 s each |
+| `fv_blend` | `num8` `bound8` | pass | 37 s, 63 s |
+| `fv_fifo` | `bmc` `prove` `order` `cover` `depth` | pass | ~5 s |
+| `fv_layer` | `bmc` `prove` `align` `watchdog` `cover` `ppc` | pass | ~5 s |
+| `fv_core` | `bmc` `prove` `ppc` `cover` | pass | ~15 s |
+| `fv_core` | `frame` `deep` `datapath` | pass | 66 s, 118 s, 173 s |
+| `fv_top` | `bmc` `prove` `wire8` `deep` `cover` | pass | ~25 s |
 
-Three and three-quarter minutes for the whole suite from clean on one machine,
-most of it the two `fv_core` outliers; `sby` runs the tasks of one file in
-parallel. `make quick` is the subset worth running while editing RTL and takes
-just over thirty seconds — every `bmc` task plus the three cheap blend groups,
-which between them catch the great majority of RTL mistakes.
+Four and three-quarter minutes for the whole suite from clean on one machine, most of
+it the three `fv_core` outliers; `sby` runs the tasks of one file in parallel,
+so a unit costs its slowest task rather than the sum. `make quick` is the
+subset worth running while editing RTL and takes just over thirty seconds —
+every `bmc` task plus the three cheap 8-bit blend groups, which between them
+catch the great majority of RTL mistakes.
 
-`fv_core frame` and `datapath` are worth a note: per-step BMC cost climbs
-steeply past step 13 there, so both the depth and the canvas size are held down
-hard, and the `.sby` header lists what each of the five configuration choices
-buys. `FV_CONST_PIXELS` is the most useful of them — freezing the pixel data
-for the framing check, which reads `TUSER`, `TLAST` and the handshakes and never
-a pixel, halves that task's runtime by keeping the blend cascade's 24-bit
-operands out of the unrolling.
+The blend tasks are a group crossed with a component width, and almost all of
+them are seconds: splitting the two multiplier-heavy groups out of the cheap
+ones took `blend10` from 322 s to 1 s, which is most of why running four widths
+costs no more than running one used to. §4 is what those two groups are and why
+they run at 8 bits alone.
+
+`fv_core frame`, `deep` and `datapath` are worth a note: per-step BMC cost
+climbs steeply past step 13 there, so the depth, the canvas size and in one
+case the component width are all held down hard, and the `.sby` header lists
+what each of the configuration choices buys. `FV_CONST_PIXELS` is the most
+useful of them — freezing the pixel data for the framing check, which reads
+`TUSER`, `TLAST` and the handshakes and never a pixel, halves that task's
+runtime by keeping the blend cascade's operands out of the unrolling. `deep` is
+the same property as `datapath` at `P_CH_W = 16` and runs at depth 12 rather
+than 16 for the same reason: 103 s at twelve steps, and step 14 had not cleared
+after six minutes.
 
 `prove` tasks are unbounded k-induction. `bmc`, `order`, `align`, `frame`,
-`datapath` and `watchdog` are bounded model checking from reset, for the reasons
-given where each appears. Every `cover` task passes with no unreached
-statement, which is what stops a passing proof from being a proof over a dead
-environment — `fv_core.sby cover` in particular reaches
+`datapath`, `deep`, `wire8` and `watchdog` are bounded model checking from
+reset, for the reasons given where each appears. Every `cover` task passes with
+no unreached statement, which is what stops a passing proof from being a proof
+over a dead environment — `fv_core.sby cover` in particular reaches
 `c_starve_while_running`, a layer starving while the output keeps producing
 beats, which is R6 happening rather than R6 merely not being contradicted.
 
@@ -564,8 +661,21 @@ matters.
   that only appears above some threshold — a 16-bit comparison that is wrong
   only near its top, say — is not caught. §6 has the reasoning.
 - **Layer counts above two, and `P_PPC` above two.** The per-layer and per-lane
-  logic is generated, so the untested instances are copies. That is an argument,
-  not a proof.
+  logic is generated, so the untested instances are copies. That is an
+  argument, not a proof. The one thing proved at all eight layers is the
+  wiring: `fv_top.sby wire8` checks that every stream port the block brings out
+  reaches the layer it belongs to, which is the part that is hand-written
+  rather than generated.
+- **The composite at a component width above 8, beyond the background case.**
+  `fv_core.sby deep` proves that an all-transparent composite is exactly the
+  expanded background at `P_CH_W = 16`, which covers the widened cascade,
+  the register expansion and the output packing end to end. What it does not
+  cover is a composite with a layer actually contributing at that width, and
+  nothing here does — the arithmetic for it is proved in §4 and the composition
+  is proved at 8 bits, but the two are not joined at 16. `make -C tb ch-sweep`
+  is what closes that, with a golden model rather than a solver.
+- **The two multiplier-heavy blend groups above 8 bits.** §4 says exactly which
+  four properties and why, and gives the algebra they follow from.
 - **FIFO depths other than 2, 4, 8 and 64.** The properties are about pointer
   arithmetic, which is depth-independent, and the `depth` task checks that
   claim at one larger size. The shipping depth is 2048 and is never simulated
@@ -582,9 +692,10 @@ matters.
   unreachable.
 - **The picture.** No proof here says the composite is the *right* image for a
   given set of layer contents, except in the all-transparent case. That is what
-  the UVM scoreboard is for, and its independently written golden blend is the
-  right tool for it. The proofs cover the arithmetic identities the scoreboard
-  cannot exhaust and the structural claims it cannot generalise.
+  the UVM scoreboard is for, and its independently written golden blend — which
+  now carries the component width too — is the right tool for it. The proofs
+  cover the arithmetic identities the scoreboard cannot exhaust and the
+  structural claims it cannot generalise.
 - **Timing, area, CDC.** Not what this is.
 
 ---

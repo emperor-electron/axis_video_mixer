@@ -35,6 +35,10 @@
 //           beats -- so a line is exactly cfg_w_beats beats with no partial one
 //           at the end, and TLAST lands on a beat boundary.
 //
+//           Nothing here looks inside a pixel, so the colour component width
+//           reaches this file only as the beat width it contributes to. A
+//           deeper component makes the buffer wider and changes nothing else.
+//
 //           That constraint is the entire reason this file barely changed. Take
 //           it away and every line ends mid-beat, TKEEP starts meaning
 //           something, and the FIFO read side needs a barrel shifter to realign
@@ -46,8 +50,10 @@ module axis_mixer_layer
 #(
     parameter int P_FIFO_DEPTH = 2048,
     parameter int P_PPC = 1,
+    // Colour component width, 8, 10, 12 or 16. Only ever the beat width here.
+    parameter int P_CH_W = 8,
     // Derived; do not override.
-    parameter int P_BEAT_W = P_PPC * PX_W
+    parameter int P_BEAT_W = P_PPC * 4 * P_CH_W
 ) (
     input logic clk,
     input logic rst_n,
@@ -72,7 +78,7 @@ module axis_mixer_layer
     input logic [31:0] stall_limit,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
-    // Layer input stream, RGBA8
+    // Layer input stream, RGBA with a P_CH_W-bit component
     ////////////////////////////////////////////////////////////////////////////////////////////////
     input  logic                s_axis_tvalid,
     output logic                s_axis_tready,
@@ -236,8 +242,10 @@ module axis_mixer_layer
   // Buffer
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Depth is in BEATS. Total storage is therefore constant across P_PPC for a
-  // given pixel capacity -- a 2048-pixel line buffer is 2048 x 32 at P_PPC = 1
-  // and 256 x 256 at P_PPC = 8, both 65536 bits, both 2 RAMB36.
+  // given pixel capacity -- a 2048-pixel RGBA8 line buffer is 2048 x 32 at
+  // P_PPC = 1 and 256 x 256 at P_PPC = 8, both 65536 bits, both 2 RAMB36. It
+  // scales with the component width on top of that: the same line buffer at
+  // P_CH_W = 16 is 2048 x 64, twice the block RAM.
   axis_mixer_fifo #(
       .P_WIDTH(P_BEAT_W),
       .P_DEPTH(P_FIFO_DEPTH)

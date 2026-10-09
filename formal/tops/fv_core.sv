@@ -92,10 +92,19 @@ module fv_core
     // says nothing about the design.
     parameter bit FV_CHECK_LIVENESS = 1'b1,
 
+    // Colour component width. The raster, the window compares, the flow
+    // control and the error logic are all width-independent, so the invariant
+    // tasks run at the narrowest; the datapath task is where the width is
+    // actually part of the claim, because the composite it checks is built out
+    // of blend_rgb at this width.
+    parameter int P_CH_W = 8,
+
     // Derived; do not override.
-    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? PX_W : RGB_W,
+    parameter int P_PX_W = 4 * P_CH_W,
+    parameter int P_RGB_W = 3 * P_CH_W,
+    parameter int P_PX_OUT_W = P_OUT_HAS_ALPHA ? P_PX_W : P_RGB_W,
     parameter int P_OUT_W = P_PPC * P_PX_OUT_W,
-    parameter int P_BEAT_W = P_PPC * PX_W
+    parameter int P_BEAT_W = P_PPC * P_PX_W
 ) (
     input logic clk,
 
@@ -233,7 +242,8 @@ module fv_core
       .P_NUM_LAYERS   (P_NUM_LAYERS),
       .P_FIFO_DEPTH   (P_FIFO_DEPTH),
       .P_OUT_HAS_ALPHA(P_OUT_HAS_ALPHA),
-      .P_PPC          (P_PPC)
+      .P_PPC          (P_PPC),
+      .P_CH_W         (P_CH_W)
   ) dut (
       .clk  (clk),
       .rst_n(rst_n),

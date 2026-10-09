@@ -3,27 +3,33 @@
 Filename: gen_regs.py
 Author  : Benjamin Tamayo
 Date    : 09/06/2026
-Purpose : Emit regs.json for the AXI4-Stream video mixer, for a given layer count.
+Purpose : Emit regs.json for the AXI4-Stream video mixer, plus the adapter that
+          turns corsair's flat port list into the arrays the datapath wants.
 
-          The mixer's layer count is an RTL parameter, and the register map has
-          one four-register block per layer. Hand-maintaining regs.json would
-          mean the map and the parameter could disagree -- and they would
-          disagree silently, because nothing in corsair or the RTL cross-checks
-          them. Generating the map from the same number that parameterises the
-          RTL removes that failure mode entirely.
+          The map is generated for the MAXIMUM layer count the RTL brings out
+          as ports -- eight -- not for the layer count a particular build
+          instantiates. One map therefore describes every build, and a build
+          with fewer layers simply leaves the upper blocks unwired: their
+          configuration outputs go nowhere and their status inputs read zero.
+          Software is told the real count by CAPS.NUM_LAYERS.
+
+          That is why nothing else here is a generator option any more. Layer
+          count, pixels per clock, component width, FIFO depth and whether the
+          output carries alpha are all RTL parameters, and all five are
+          reported through CAPS as hardware inputs rather than baked in as
+          reset values. A map and a build cannot disagree about them because
+          the map no longer holds an opinion.
 
           Usage:
-              ./gen_regs.py                 # 4 layers, writes regs.json
-              ./gen_regs.py -n 8            # 8 layers
-              ./gen_regs.py -n 2 -o two.json
+              ./gen_regs.py                 # 8 layer blocks, writes regs.json
+              ./gen_regs.py -n 4            # a smaller map, for a build that
+                                            # will never want more than 4
 
           Then run corsair as usual:
               corsair -r regs.json -c csrconfig
 
-          The RTL reads the same count from P_NUM_LAYERS. Building with a
-          P_NUM_LAYERS that does not match the map is caught at elaboration by
-          an assertion in axis_video_mixer.sv, which compares P_NUM_LAYERS
-          against the generated CAPS.NUM_LAYERS reset value.
+          Building with a P_NUM_LAYERS larger than the map is caught at
+          elaboration by an assertion in the generated adapter.
 """
 
 import argparse
@@ -37,8 +43,16 @@ GLOBAL_BASE = 0x00
 LAYER_BASE = 0x40
 LAYER_STRIDE = 0x10
 
+# The number of layer stream port sets axis_video_mixer.sv brings out, and so
+# the largest map worth generating. Mirrored by MAX_LAYERS in the RTL package.
+MAX_LAYERS = 8
+
 VER_MAJOR = 1
-VER_MINOR = 0
+# 1.1 adds four more layer blocks, CAPS.CH_W, and turns the rest of CAPS from
+# baked constants into hardware inputs. Every existing field keeps its address,
+# position and meaning, so it is a minor revision: software written against 1.0
+# still works, it just cannot see the new layers.
+VER_MINOR = 1
 MAGIC = 0x4D58  # ASCII 'MX'
 
 
@@ -68,7 +82,7 @@ def reg(name, description, address, bitfields):
     }
 
 
-def global_regs(num_layers, fifo_depth_log2, out_has_alpha, ppc):
+def global_regs(num_layers):
     """The registers that exist once, regardless of layer count."""
     return [
         reg(
@@ -87,27 +101,35 @@ def global_regs(num_layers, fifo_depth_log2, out_has_alpha, ppc):
         ),
         reg(
             "CAPS",
-            "Build-time capabilities, so software can size its own layer loops from the "
-            "hardware it is actually talking to instead of from a compile-time assumption. "
-            "These are constants baked into the map by gen_regs.py; axis_video_mixer.sv "
-            "asserts at elaboration that they match the RTL parameters, so a map and a build "
-            "that disagree fail loudly rather than misreporting.",
+            "Build-time capabilities, so software can size its own layer loops and unpack "
+            "pixels from the hardware it is actually talking to instead of from a compile-time "
+            "assumption. Every field is driven from the corresponding RTL parameter rather "
+            "than baked into the map, so one map describes every build and none of these can "
+            "be stale.",
             GLOBAL_BASE + 0x04,
             [
-                bf("NUM_LAYERS", "Number of layer input streams this build instantiates.",
-                   0, 8, "ro", "f", num_layers),
+                bf("NUM_LAYERS", "Number of layer input streams this build instantiates, 1 to "
+                   "%d. The top level brings out %d sets of stream ports regardless; the ones "
+                   "at or above this index are not implemented and hold their TREADY low, and "
+                   "their L<i>_* registers read as zero." % (MAX_LAYERS, MAX_LAYERS),
+                   0, 8, "ro", "i"),
                 bf("FIFO_DEPTH_LOG2", "Per-layer input FIFO depth in BEATS, as a power of two. "
                    "A layer wider than PPC * 2**this cannot be guaranteed free of underflow, "
                    "because a window at x = 0 gets no head start within the output line.",
-                   8, 8, "ro", "f", fifo_depth_log2),
-                bf("OUT_HAS_ALPHA", "1 if the output stream carries RGBA8 per pixel, "
-                   "0 if it carries RGB8 with alpha discarded after blending.",
-                   16, 1, "ro", "f", 1 if out_has_alpha else 0),
+                   8, 8, "ro", "i"),
+                bf("OUT_HAS_ALPHA", "1 if the output stream carries RGBA per pixel, "
+                   "0 if it carries RGB with alpha discarded after blending.",
+                   16, 1, "ro", "i"),
+                bf("CH_W", "Colour component width in bits: 8, 10, 12 or 16. A pixel is four "
+                   "components, 4*CH_W bits, packed {R, G, B, A} with R in the most "
+                   "significant and alpha in the least. Read this before unpacking TDATA -- it "
+                   "is the only thing that says where the component boundaries are.",
+                   17, 7, "ro", "i"),
                 bf("PPC", "Pixels per beat on every stream, 1, 2, 4 or 8. Also the horizontal "
                    "alignment granularity: CANVAS.WIDTH, Ln_POS.X and Ln_SIZE.WIDTH must all be "
                    "multiples of this, and a write that is not is rejected with ERR.CFG rather "
                    "than rounded. Read it before computing a layout.",
-                   24, 8, "ro", "f", ppc),
+                   24, 8, "ro", "i"),
             ],
         ),
         reg(
@@ -315,14 +337,14 @@ def layer_regs(index):
     ]
 
 
-def build(num_layers, fifo_depth_log2, out_has_alpha, ppc):
-    regmap = global_regs(num_layers, fifo_depth_log2, out_has_alpha, ppc)
+def build(num_layers):
+    regmap = global_regs(num_layers)
     for i in range(num_layers):
         regmap.extend(layer_regs(i))
     return {"regmap": regmap}
 
 
-CSR_WRAPPER_HEADER = '''`timescale 1ns / 1ps
+CSR_WRAPPER_HEADER = """`timescale 1ns / 1ps
 ///////////////////////////////////////////////////////////////////
 // Filename: axis_video_mixer_csr.sv
 // GENERATED by regs/gen_regs.py -- do not edit, your changes will be overwritten.
@@ -330,20 +352,34 @@ CSR_WRAPPER_HEADER = '''`timescale 1ns / 1ps
 // Purpose : Adapt the flat, per-field port list that corsair generates into the
 //           per-layer arrays the mixer datapath actually wants.
 //
-//           corsair cannot emit an array of register blocks, so a %d-layer map
-//           produces %d individually named ports per layer. Hand-wiring those
-//           would make the layer count a hand-edit in two places, which is
-//           exactly the drift this generator exists to prevent. Both this file
-//           and regs.json come from the same run, so they cannot disagree.
+//           corsair cannot emit an array of register blocks, so a map with
+//           @@MAP_LAYERS@@ layer blocks produces @@MAP_LAYERS@@ individually
+//           named sets of ports. Hand-wiring those would make the layer count a
+//           hand-edit in two places, which is exactly the drift this generator
+//           exists to prevent.
 //
-//           Regenerate both with:
-//               cd regs && ./gen_regs.py -n <layers> && corsair -r regs.json -c csrconfig
+//           The map is generated for the MAXIMUM layer count, not for the one a
+//           build instantiates. P_NUM_LAYERS may be anything from 1 to
+//           @@MAP_LAYERS@@: the blocks below that index are wired to the
+//           datapath, and the ones at or above it have their configuration
+//           outputs left dangling and their status inputs tied to zero, so they
+//           read as a disabled, unarmed, empty layer. Software is told the real
+//           count by CAPS.NUM_LAYERS, which is an input here rather than a
+//           constant in the map.
+//
+//           Regenerate with:
+//               cd regs && ./gen_regs.py && corsair -r regs.json -c csrconfig
 ///////////////////////////////////////////////////////////////////
 
 module axis_video_mixer_csr #(
-    parameter int P_NUM_LAYERS = %d,
-    parameter int P_PPC = %d,
-    parameter int P_ADDR_W     = 12
+    // Layers this build instantiates, 1 .. @@MAP_LAYERS@@.
+    parameter int P_NUM_LAYERS = @@DEFAULT_LAYERS@@,
+    // Reported through CAPS so software never has to assume them.
+    parameter int P_PPC = 1,
+    parameter int P_CH_W = 8,
+    parameter int P_FIFO_DEPTH = 2048,
+    parameter bit P_OUT_HAS_ALPHA = 1'b1,
+    parameter int P_ADDR_W = 12
 ) (
     input logic clk,
     input logic rst_n,
@@ -418,22 +454,84 @@ module axis_video_mixer_csr #(
     ////////////////////////////////////////////////////////////////////////////////////////////////
     output logic irq
 );
+  // Layer blocks in the generated map. A build may use fewer, never more.
+  localparam int LP_MAP_LAYERS = @@MAP_LAYERS@@;
 
-  // The map this file was generated alongside. A build whose parameter disagrees
-  // with the generated map would silently leave layers unwired, so stop instead.
   initial begin
-    if (P_NUM_LAYERS != %d) begin
-      $fatal(1, "axis_video_mixer_csr: P_NUM_LAYERS=%%0d but the register map was generated for %d",
-             P_NUM_LAYERS);
-    end
-    // CAPS.PPC is a constant in the generated map. A build whose P_PPC differs
-    // would report an alignment granularity it does not enforce, and software
-    // would compute a layout the hardware then rejects.
-    if (P_PPC != %d) begin
-      $fatal(1, "axis_video_mixer_csr: P_PPC=%%0d but the register map was generated for %d",
-             P_PPC);
+    if (P_NUM_LAYERS < 1 || P_NUM_LAYERS > LP_MAP_LAYERS) begin
+      $fatal(1, "axis_video_mixer_csr: P_NUM_LAYERS=%0d but the register map has %0d layer blocks",
+             P_NUM_LAYERS, LP_MAP_LAYERS);
     end
   end
+
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Map-width layer signals
+  //
+  // corsair's ports are per layer block and there are LP_MAP_LAYERS of them,
+  // so the connection list below is fixed. These arrays carry the full map
+  // width; the bridge further down connects the first P_NUM_LAYERS of each to
+  // the datapath and ties off the rest.
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  logic [LP_MAP_LAYERS-1:0] map_en;
+  logic [              7:0] map_alpha    [LP_MAP_LAYERS];
+  logic [LP_MAP_LAYERS-1:0] map_alpha_src;
+  logic [             15:0] map_x        [LP_MAP_LAYERS];
+  logic [             15:0] map_y        [LP_MAP_LAYERS];
+  logic [             15:0] map_w        [LP_MAP_LAYERS];
+  logic [             15:0] map_h        [LP_MAP_LAYERS];
+
+  logic [LP_MAP_LAYERS-1:0] map_armed;
+  logic [LP_MAP_LAYERS-1:0] map_dropped;
+  logic [LP_MAP_LAYERS-1:0] map_cfg_bad;
+  logic [             15:0] map_level    [LP_MAP_LAYERS];
+  logic [LP_MAP_LAYERS-1:0] map_err_layer_set;
+
+  for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_layer_used
+    assign lay_en[gi]             = map_en[gi];
+    assign lay_alpha[gi]          = map_alpha[gi];
+    assign lay_alpha_src[gi]      = map_alpha_src[gi];
+    assign lay_x[gi]              = map_x[gi];
+    assign lay_y[gi]              = map_y[gi];
+    assign lay_w[gi]              = map_w[gi];
+    assign lay_h[gi]              = map_h[gi];
+    assign map_armed[gi]          = lay_armed[gi];
+    assign map_dropped[gi]        = lay_dropped[gi];
+    assign map_cfg_bad[gi]        = lay_cfg_bad[gi];
+    assign map_level[gi]          = lay_level[gi];
+    assign map_err_layer_set[gi]  = err_layer_set[gi];
+  end
+
+  // A layer block the build does not implement reads back as a layer that is
+  // switched off and has never seen a stream, which is exactly what it is.
+  // Its configuration outputs are still writable and still read back -- that
+  // is corsair's storage, and leaving it connected to nothing is what makes
+  // the block harmless rather than absent.
+  for (genvar gi = P_NUM_LAYERS; gi < LP_MAP_LAYERS; gi++) begin : g_layer_unused
+    assign map_armed[gi]         = 1'b0;
+    assign map_dropped[gi]       = 1'b0;
+    assign map_cfg_bad[gi]       = 1'b0;
+    assign map_level[gi]         = 16'd0;
+    assign map_err_layer_set[gi] = 1'b0;
+  end
+
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Capabilities
+  //
+  // Driven from the parameters rather than baked into the map, so a build and
+  // its register map cannot disagree about what was built. $clog2 of the depth
+  // rather than the depth itself because the field is 8 bits and the depth is
+  // a power of two by construction -- axis_video_mixer.sv fails the build if
+  // it is not.
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  logic [7:0] caps_num_layers;
+  logic [7:0] caps_fifo_depth_log2;
+  logic [6:0] caps_ch_w;
+  logic [7:0] caps_ppc;
+
+  assign caps_num_layers      = 8'(P_NUM_LAYERS);
+  assign caps_fifo_depth_log2 = 8'($clog2(P_FIFO_DEPTH));
+  assign caps_ch_w            = 7'(P_CH_W);
+  assign caps_ppc             = 8'(P_PPC);
 
   // ERR readback, needed to build irq and STATUS.ERR_ANY.
   //
@@ -495,14 +593,15 @@ module axis_video_mixer_csr #(
 
   assign irq = |(err_ff & irq_en);
 
-'''
+"""
 
 
-def emit_csr_wrapper(num_layers, ppc, path):
+def emit_csr_wrapper(num_layers, path):
     """Emit the array adapter around corsair's flat register block."""
     o = []
     o.append(CSR_WRAPPER_HEADER
-             % (num_layers, 4, num_layers, ppc, num_layers, num_layers, ppc, ppc))
+             .replace("@@MAP_LAYERS@@", str(num_layers))
+             .replace("@@DEFAULT_LAYERS@@", str(num_layers)))
 
     o.append("  ////////////////////////////////////////////////////////////////////"
              "////////////////////////////////\n")
@@ -517,6 +616,11 @@ def emit_csr_wrapper(num_layers, ppc, path):
     o.append("      .rst(rst_n),\n\n")
 
     conns = [
+        ("csr_caps_num_layers_in", "caps_num_layers"),
+        ("csr_caps_fifo_depth_log2_in", "caps_fifo_depth_log2"),
+        ("csr_caps_out_has_alpha_in", "P_OUT_HAS_ALPHA"),
+        ("csr_caps_ch_w_in", "caps_ch_w"),
+        ("csr_caps_ppc_in", "caps_ppc"),
         ("csr_ctrl_en_out", "ctrl_en"),
         ("csr_ctrl_soft_rst_out", "ctrl_soft_rst"),
         ("csr_canvas_width_out", "canvas_width"),
@@ -525,7 +629,7 @@ def emit_csr_wrapper(num_layers, ppc, path):
         ("csr_stall_limit_cycles_out", "stall_limit"),
         ("csr_status_err_any_in", "(|err_ff)"),
         ("csr_status_frame_active_in", "status_frame_active"),
-        ("csr_status_layer_armed_in", "lay_armed"),
+        ("csr_status_layer_armed_in", "map_armed"),
         ("csr_frame_count_count_in", "frame_count"),
         ("csr_err_cfg_set", "err_cfg_set"),
         ("csr_err_starve_set", "err_starve_set"),
@@ -539,20 +643,20 @@ def emit_csr_wrapper(num_layers, ppc, path):
         ("csr_irq_en_out_stall_out", "irq_en[4]"),
     ]
     for i in range(num_layers):
-        conns.append(("csr_err_layer_l%d_set" % i, "err_layer_set[%d]" % i))
+        conns.append(("csr_err_layer_l%d_set" % i, "map_err_layer_set[%d]" % i))
     for i in range(num_layers):
         conns += [
-            ("csr_l%d_ctrl_en_out" % i, "lay_en[%d]" % i),
-            ("csr_l%d_ctrl_alpha_out" % i, "lay_alpha[%d]" % i),
-            ("csr_l%d_ctrl_alpha_src_out" % i, "lay_alpha_src[%d]" % i),
-            ("csr_l%d_pos_x_out" % i, "lay_x[%d]" % i),
-            ("csr_l%d_pos_y_out" % i, "lay_y[%d]" % i),
-            ("csr_l%d_size_width_out" % i, "lay_w[%d]" % i),
-            ("csr_l%d_size_height_out" % i, "lay_h[%d]" % i),
-            ("csr_l%d_status_armed_in" % i, "lay_armed[%d]" % i),
-            ("csr_l%d_status_dropped_in" % i, "lay_dropped[%d]" % i),
-            ("csr_l%d_status_cfg_bad_in" % i, "lay_cfg_bad[%d]" % i),
-            ("csr_l%d_status_fifo_level_in" % i, "lay_level[%d]" % i),
+            ("csr_l%d_ctrl_en_out" % i, "map_en[%d]" % i),
+            ("csr_l%d_ctrl_alpha_out" % i, "map_alpha[%d]" % i),
+            ("csr_l%d_ctrl_alpha_src_out" % i, "map_alpha_src[%d]" % i),
+            ("csr_l%d_pos_x_out" % i, "map_x[%d]" % i),
+            ("csr_l%d_pos_y_out" % i, "map_y[%d]" % i),
+            ("csr_l%d_size_width_out" % i, "map_w[%d]" % i),
+            ("csr_l%d_size_height_out" % i, "map_h[%d]" % i),
+            ("csr_l%d_status_armed_in" % i, "map_armed[%d]" % i),
+            ("csr_l%d_status_dropped_in" % i, "map_dropped[%d]" % i),
+            ("csr_l%d_status_cfg_bad_in" % i, "map_cfg_bad[%d]" % i),
+            ("csr_l%d_status_fifo_level_in" % i, "map_level[%d]" % i),
         ]
 
     width = max(len(p) for p, _ in conns)
@@ -575,35 +679,30 @@ def emit_csr_wrapper(num_layers, ppc, path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[3])
-    ap.add_argument("-n", "--num-layers", type=int, default=4,
-                    help="number of layer input streams (default 4)")
-    ap.add_argument("-d", "--fifo-depth-log2", type=int, default=11,
-                    help="per-layer FIFO depth as a power of two (default 11, 2048 pixels)")
-    ap.add_argument("--rgb-out", action="store_true",
-                    help="output stream is 24-bit RGB8 rather than 32-bit RGBA8")
-    ap.add_argument("-p", "--ppc", type=int, default=1,
-                    help="pixels per clock on every stream: 1, 2, 4 or 8 (default 1)")
+    ap.add_argument("-n", "--num-layers", type=int, default=MAX_LAYERS,
+                    help="layer blocks in the map, 1 to %d (default %d). This is the maximum "
+                         "a build may instantiate, not what it must." % (MAX_LAYERS, MAX_LAYERS))
     ap.add_argument("-o", "--output", default="regs.json", help="output path")
     ap.add_argument("-w", "--wrapper", default="../src/generated/axis_video_mixer_csr.sv",
                     help="path for the generated array adapter")
     args = ap.parse_args()
 
-    if args.ppc not in (1, 2, 4, 8):
-        sys.exit("gen_regs: --ppc must be 1, 2, 4 or 8, got %d" % args.ppc)
-    if not 1 <= args.num_layers <= 16:
-        sys.exit("layer count must be between 1 and 16 (ERR_LAYER is 16 bits wide)")
+    if not 1 <= args.num_layers <= MAX_LAYERS:
+        sys.exit("gen_regs: layer count must be between 1 and %d, got %d"
+                 % (MAX_LAYERS, args.num_layers))
 
-    doc = build(args.num_layers, args.fifo_depth_log2, not args.rgb_out, args.ppc)
+    doc = build(args.num_layers)
     with open(args.output, "w") as f:
         json.dump(doc, f, indent=4)
         f.write("\n")
 
-    emit_csr_wrapper(args.num_layers, args.ppc, args.wrapper)
+    emit_csr_wrapper(args.num_layers, args.wrapper)
 
     last = doc["regmap"][-1]["address"]
-    print("wrote %s: %d layers, %d registers, highest address 0x%02X"
+    print("wrote %s: %d layer blocks, %d registers, highest address 0x%02X"
           % (args.output, args.num_layers, len(doc["regmap"]), last))
-    print("wrote %s: array adapter for %d layers" % (args.wrapper, args.num_layers))
+    print("wrote %s: array adapter for up to %d layers"
+          % (args.wrapper, args.num_layers))
 
 
 if __name__ == "__main__":

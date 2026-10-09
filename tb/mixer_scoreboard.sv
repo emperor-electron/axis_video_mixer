@@ -48,8 +48,8 @@ class mixer_scoreboard extends uvm_subscriber #(axi_stream_seq_item);
   // predicting pixels stops being meaningful. Framing is still checked.
   bit check_pixels = 1'b1;
 
-  // The DUT is built with alpha on the output, so TDATA is 4 bytes and the
-  // low byte must be 0xFF on every beat.
+  // The DUT is built with alpha on the output, so a pixel is four components
+  // and the lowest one must be at full scale on every beat.
   bit out_has_alpha = 1'b1;
 
   // ---- Running state ---------------------------------------------------
@@ -88,7 +88,7 @@ class mixer_scoreboard extends uvm_subscriber #(axi_stream_seq_item);
   extern function void set_layer(int unsigned i, bit en, int unsigned lx, int unsigned ly,
                                  int unsigned lw, int unsigned lh, logic [7:0] alpha,
                                  bit alpha_src = 1'b0, int unsigned phase = 0);
-  extern function logic [23:0] expected_rgb(int unsigned px, int unsigned py);
+  extern function logic [MIX_RGB_W-1:0] expected_rgb(int unsigned px, int unsigned py);
 
 endclass : mixer_scoreboard
 
@@ -126,8 +126,13 @@ endfunction : set_layer
 // cascade fixes -- so an off-by-one in either direction shows up as a colour
 // error on every overlapped pixel rather than as a subtle shift.
 ///////////////////////////////////////////////////////////////////
-function logic [23:0] mixer_scoreboard::expected_rgb(int unsigned px, int unsigned py);
-  logic [23:0] acc = background;
+function logic [MIX_RGB_W-1:0] mixer_scoreboard::expected_rgb(int unsigned px,
+                                                              int unsigned py);
+  // The background register is 8 bits per component whatever the component
+  // width is, and the datapath expands it as it latches -- so the model has to
+  // expand it too, or every uncovered pixel would miscompare at 10, 12 and 16
+  // bits while being right at 8.
+  logic [MIX_RGB_W-1:0] acc = gold_rgb_up(background);
 
   for (int unsigned i = 0; i < num_layers; i++) begin
     if (!lay_en[i] || lay_absent[i]) continue;
@@ -135,11 +140,13 @@ function logic [23:0] mixer_scoreboard::expected_rgb(int unsigned px, int unsign
     if (py < lay_y[i] || py >= (lay_y[i] + lay_h[i])) continue;
 
     begin
-      logic [31:0] p;
-      logic [ 7:0] a;
-      p = layer_pixel(i, (px - lay_x[i]) + lay_phase[i], (py - lay_y[i]) + lay_phase[i]);
-      a = lay_alpha_src[i] ? lay_alpha[i] : gold_mul255(p[7:0], lay_alpha[i]);
-      acc = gold_blend_rgb(p[31:8], acc, a);
+      logic [MIX_PX_W-1:0] p;
+      logic [MIX_CH_W-1:0] a;
+      logic [MIX_CH_W-1:0] ga;
+      p  = layer_pixel(i, (px - lay_x[i]) + lay_phase[i], (py - lay_y[i]) + lay_phase[i]);
+      ga = gold_up(lay_alpha[i]);
+      a  = lay_alpha_src[i] ? ga : gold_mul_max(p[MIX_CH_W-1:0], ga);
+      acc = gold_blend_rgb(p[MIX_PX_W-1-:MIX_RGB_W], acc, a);
     end
   end
 
@@ -149,14 +156,20 @@ endfunction : expected_rgb
 
 function void mixer_scoreboard::write(axi_stream_seq_item t);
   bit exp_sof, exp_eol;
-  logic [23:0] got_rgb, exp_rgb;
-  logic [7:0] got_alpha;
+  logic [MIX_RGB_W-1:0] got_rgb, exp_rgb;
+  logic [MIX_CH_W-1:0] got_alpha;
+  // The beat, reassembled as bits. Lanes are byte-aligned but the components
+  // inside a pixel are not at 10 or 12 bits, so the comparison has to work in
+  // bits rather than in the UVC's bytes.
+  logic [MIX_DATA_BYTES*8-1:0] beat_bits;
   int unsigned w_beats;
   int unsigned bx;
   int unsigned lane_x;
-  int unsigned base;
 
   beats_seen++;
+
+  beat_bits = '0;
+  for (int unsigned k = 0; k < MIX_DATA_BYTES; k++) beat_bits[k*8+:8] = t.tdata[k];
 
   // The model still walks the raster in PIXELS -- x is a pixel coordinate --
   // because that is the coordinate expected_rgb() and the layer windows are
@@ -193,26 +206,28 @@ function void mixer_scoreboard::write(axi_stream_seq_item t);
   end
 
   // ---- Pixel content --------------------------------------------------
-  // One beat carries MIX_PPC pixels, lane 0 in the low bytes. Every lane is
+  // One beat carries MIX_PPC pixels, lane 0 in the low bits. Every lane is
   // checked: a fault confined to one lane -- a mis-indexed replica of the
   // cascade, say -- would otherwise show up only as a vertical stripe that a
   // lane-0-only check would miss entirely.
   for (int unsigned j = 0; j < MIX_PPC; j++) begin
     lane_x = (bx * MIX_PPC) + j;
-    base   = j * (out_has_alpha ? 4 : 3);
 
     if (out_has_alpha) begin
-      got_alpha = t.tdata[base];
-      got_rgb   = {t.tdata[base+3], t.tdata[base+2], t.tdata[base+1]};
-      if (got_alpha !== 8'hFF) begin
+      logic [MIX_PX_W-1:0] p;
+      p         = beat_bits[j*MIX_PX_W+:MIX_PX_W];
+      got_alpha = p[MIX_CH_W-1:0];
+      got_rgb   = p[MIX_PX_W-1-:MIX_RGB_W];
+      if (got_alpha !== MIX_CH_W'(MIX_MAX)) begin
         pixel_errors++;
         if (pixel_errors <= 20) begin
-          `uvm_error("ALPHA", $sformatf("output alpha at (%0d,%0d) lane %0d is 0x%02h, expected 0xFF",
-                                        lane_x, y, j, got_alpha))
+          `uvm_error("ALPHA", $sformatf({"output alpha at (%0d,%0d) lane %0d is 0x%h, expected ",
+                                         "0x%h (full scale)"}, lane_x, y, j, got_alpha,
+                                        MIX_CH_W'(MIX_MAX)))
         end
       end
     end else begin
-      got_rgb = {t.tdata[base+2], t.tdata[base+1], t.tdata[base]};
+      got_rgb = beat_bits[j*MIX_RGB_W+:MIX_RGB_W];
     end
 
     if (check_pixels && (frames_seen >= check_from_frame) &&
@@ -223,7 +238,7 @@ function void mixer_scoreboard::write(axi_stream_seq_item t);
         // Capped so a systematic fault does not bury the log; the count in the
         // report is the honest total.
         if (pixel_errors <= 20) begin
-          `uvm_error("PIXEL", $sformatf("(%0d,%0d) lane %0d frame %0d: got 0x%06h, expected 0x%06h",
+          `uvm_error("PIXEL", $sformatf("(%0d,%0d) lane %0d frame %0d: got 0x%h, expected 0x%h",
                                         lane_x, y, j, frames_seen, got_rgb, exp_rgb))
         end
       end
