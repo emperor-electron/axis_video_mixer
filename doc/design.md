@@ -377,24 +377,35 @@ bodies are otherwise identical. The duplication is deliberate and the comment
 on it says so: if the two bodies ever diverge, the parameter stops being a
 resource knob and starts being a second design.
 
-**What it costs**, at 2048 × 32 per layer, from yosys with `-family xcup`:
+**What it costs.** Vivado 2023.2, `synth_design` out-of-context,
+`xczu7ev-ffvc1156-2-e`, clock constrained to 6.734 ns. The whole block at
+`P_NUM_LAYERS = 4`, so four layer buffers of 2048 × 32:
 
-| | Memory | Flops |
-|---|---|---|
-| `"block"` | 2 × RAMB36E2 | 25 |
-| `"ultra"` | 1 × URAM288 | 25 |
+| | RAMB36E2 | URAM288 | Flops | LUTs | DSP | WNS |
+|---|---|---|---|---|---|---|
+| `"block"` | 8 | 0 | 2242 | 3021 | 216 | 3.317 ns |
+| `"ultra"` | 0 | 4 | 2290 | 2969 | 216 | 3.317 ns |
 
-The equal flop count is the thing worth noting: `mem_dout` carries a
-synchronous clear, and a clear the macro cannot absorb would have to be built
+One buffer to one URAM288, two RAMB36E2 to one URAM288, and identical timing
+closure. The FIFO alone at 32 × 2048 is 26 flops with `"block"` against 25 with
+`"ultra"`, which answers the question that mattered: `mem_dout` carries a
+synchronous clear, and a clear the macro could not take would have to be built
 from `P_WIDTH` fabric flops beside it — 512 of them at `P_PPC = 8` and
-`P_CH_W = 16`. It is absorbed into the output register in both cases.
+`P_CH_W = 16`. The read register is inside the macro either way.
+
+**Vivado declines to merge URAM's optional output register**, and says so
+(`Synth 8-7052`). That is correct rather than a missed optimisation: the
+optional register costs a second cycle of read latency, which a
+first-word-fall-through FIFO does not have and does not want. The
+accompanying advice to pipeline for high performance is real but not binding
+here — the FIFO closes 6.734 ns with 5.015 ns of slack as block RAM and 5.018 ns
+as URAM. Push the clock far enough and URAM without an output register becomes
+the limit; at the rates this block targets it is nowhere near.
 
 A URAM288 is 4096 × 72, so a 2048 × 32 buffer uses about a fifth of one against
 two nearly-full RAMB36s. `"ultra"` is not a free win at that size; it pays when
 the buffers are deep or wide enough to use the shape, or when block RAM is
-wanted for something else. Vivado is the tool that decides, and it is not
-available here — the primitive choice is verified in principle and unconfirmed
-on the real flow. The *behaviour* under both settings is verified properly.
+wanted for something else.
 
 ### 5.8 FWFT, with a prefetch register
 

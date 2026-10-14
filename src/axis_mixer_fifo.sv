@@ -55,25 +55,33 @@
 //             write while full is gated off. So the collision cannot occur.
 //             See the assertions at the bottom.
 //
-//           mem_dout carries a synchronous clear. That was the one thing worth
-//           checking, because a clear the macro cannot absorb has to be built
-//           from fabric flops beside it -- P_WIDTH of them, which at a 512-bit
-//           beat is not a rounding error. It is absorbed: synthesising this at
-//           32 x 2048 gives 25 flops either way, which is the pointers and
-//           rd_valid and nothing else, against 2 RAMB36E2 or 1 URAM288.
+//           mem_dout carries a synchronous clear, which was the one thing
+//           worth checking: a clear the macro cannot take has to be built from
+//           fabric flops beside it, P_WIDTH of them, which at a 512-bit beat is
+//           not a rounding error. It does not come to that. Vivado 2023.2 on
+//           xczu7ev, 32 x 2048: 26 flops with "block" against 25 with "ultra",
+//           so the read register is inside the macro either way.
+//
+//           What Vivado does NOT do is merge URAM's OPTIONAL output register,
+//           and it says so -- Synth 8-7052, "no optional output register could
+//           be merged into the ram block". That register would cost a second
+//           cycle of read latency, which this FIFO does not have and does not
+//           want, so declining it is correct rather than a missed
+//           optimisation. The accompanying advice to pipeline for high
+//           performance is real but not binding here: at the 148.5 MHz this
+//           design targets, "block" closes with 5.015 ns of slack and "ultra"
+//           with 5.018 ns. Push the clock far enough and URAM without an
+//           output register becomes the limit; at 1080p60 it is nowhere near.
 //
 //           The clear is kept rather than dropped because without it rd_data
 //           holds X until the first read, and X multiplied by an alpha of zero
 //           is X rather than zero, so it would reach the blend in simulation
 //           even though the hardware would mask it.
 //
-//           WHAT IS AND IS NOT MEASURED. The cell counts above are yosys with
-//           -family xcup, which does infer URAM288 from this style. Vivado is
-//           the tool that matters and is not available here, so treat the
-//           primitive choice as verified in principle and unconfirmed on the
-//           real flow. The FIFO's BEHAVIOUR under both settings is verified
-//           properly: bit-identical in simulation and proved by fv_fifo's
-//           ultra task.
+//           All of the above is Vivado 2023.2, synth_design out-of-context.
+//           The FIFO's BEHAVIOUR under both settings is verified separately:
+//           bit-identical to the pre-parameter FIFO over 6000 cycles of random
+//           traffic including flush, and proved again by fv_fifo's ultra task.
 ///////////////////////////////////////////////////////////////////
 
 module axis_mixer_fifo #(

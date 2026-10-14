@@ -144,12 +144,12 @@ buffers land in and nothing software can observe.
 
 **Choosing `P_RAM_STYLE`.** A resource trade, not a functional one — the two
 settings are bit-identical, which is checked rather than assumed (§14.6 and the
-`ultra` task in `formal/fv_fifo.sby`). At 2048 × 32 per layer, synthesis gives
-**2 RAMB36E2** for `"block"` against **1 URAM288** for `"ultra"`, with the same
-25 flops either way. URAM288 is 4096 × 72, so that buffer uses about a fifth of
-one; it pays when the buffers are deep or wide enough to use the shape — 4K
-lines, `P_PPC = 8`, deep colour — or simply when block RAM is wanted elsewhere.
-`"ultra"` requires UltraScale+ or later.
+`ultra` task in `formal/fv_fifo.sby`). Vivado 2023.2 on `xczu7ev` at four
+layers: **8 RAMB36E2** for `"block"` against **4 URAM288** for `"ultra"`, same
+DSPs, same 3.317 ns of slack at 148.5 MHz. URAM288 is 4096 × 72, so a
+2048 × 32 buffer uses about a fifth of one; it pays when the buffers are deep or
+wide enough to use the shape — 4K lines, `P_PPC = 8`, deep colour — or simply
+when block RAM is wanted elsewhere. `"ultra"` requires UltraScale+ or later.
 
 **Sizing `P_FIFO_DEPTH`.** It must be at least the widest layer the build will
 ever show. A window at `x = 0` gets no head start within the line, so a full
