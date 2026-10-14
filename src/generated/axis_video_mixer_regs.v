@@ -27,6 +27,8 @@ module axis_video_mixer_regs #(
 
     // CTRL.EN
     output  csr_ctrl_en_out,
+    // CTRL.SYNC_START
+    output  csr_ctrl_sync_start_out,
     // CTRL.SOFT_RST
     output  csr_ctrl_soft_rst_out,
 
@@ -42,6 +44,8 @@ module axis_video_mixer_regs #(
     input  csr_status_err_any_in,
     // STATUS.FRAME_ACTIVE
     input  csr_status_frame_active_in,
+    // STATUS.SYNC_WAIT
+    input  csr_status_sync_wait_in,
     // STATUS.LAYER_ARMED
     input [7:0] csr_status_layer_armed_in,
 
@@ -58,6 +62,8 @@ module axis_video_mixer_regs #(
     input csr_err_src_stall_set,
     // ERR.OUT_STALL
     input csr_err_out_stall_set,
+    // ERR.SYNC_TO
+    input csr_err_sync_to_set,
 
     // ERR_LAYER.L0
     input csr_err_layer_l0_set,
@@ -86,9 +92,14 @@ module axis_video_mixer_regs #(
     output  csr_irq_en_src_stall_out,
     // IRQ_EN.OUT_STALL
     output  csr_irq_en_out_stall_out,
+    // IRQ_EN.SYNC_TO
+    output  csr_irq_en_sync_to_out,
 
     // STALL_LIMIT.CYCLES
     output [31:0] csr_stall_limit_cycles_out,
+
+    // SYNC_TIMEOUT.CYCLES
+    output [31:0] csr_sync_timeout_cycles_out,
 
     // L0_CTRL.EN
     output  csr_l0_ctrl_en_out,
@@ -449,7 +460,7 @@ assign csr_id_rdata[7:0] = csr_id_ver_minor_ff;
 
 always @(posedge clk) begin
     if (!rst) begin
-        csr_id_ver_minor_ff <= 8'h1;
+        csr_id_ver_minor_ff <= 8'h2;
     end else  begin
       begin
             csr_id_ver_minor_ff <= csr_id_ver_minor_ff;
@@ -675,7 +686,7 @@ end
 // [0xc] - CTRL - Global mixer control.
 //------------------------------------------------------------------------------
 wire [31:0] csr_ctrl_rdata;
-assign csr_ctrl_rdata[7:1] = 7'h0;
+assign csr_ctrl_rdata[7:2] = 6'h0;
 assign csr_ctrl_rdata[31:9] = 23'h0;
 
 wire csr_ctrl_wen;
@@ -712,6 +723,32 @@ always @(posedge clk) begin
             end
         end else begin
             csr_ctrl_en_ff <= csr_ctrl_en_ff;
+        end
+    end
+end
+
+
+//---------------------
+// Bit field:
+// CTRL[1] - SYNC_START - Hold the output off until every enabled layer has a full line of its own buffered, then start. Removes the case the drop rule handles badly: a window touching the canvas origin needs its first pixel on the first beat of a frame and has no slack to fetch it, so an only-just-fast-enough source starves on beat zero of every frame and never recovers. While waiting, STATUS.SYNC_WAIT reads 1 and LAYER_ARMED names who is holding things up. Bound the wait with SYNC_TIMEOUT. Clear this bit for the free-running behaviour: output begins as soon as EN and a legal canvas are set, whatever the layers are doing.
+// access: rw, hardware: o
+//---------------------
+reg  csr_ctrl_sync_start_ff;
+
+assign csr_ctrl_rdata[1] = csr_ctrl_sync_start_ff;
+
+assign csr_ctrl_sync_start_out = csr_ctrl_sync_start_ff;
+
+always @(posedge clk) begin
+    if (!rst) begin
+        csr_ctrl_sync_start_ff <= 1'b1;
+    end else  begin
+     if (csr_ctrl_wen) begin
+            if (wstrb[0]) begin
+                csr_ctrl_sync_start_ff <= wdata[1];
+            end
+        end else begin
+            csr_ctrl_sync_start_ff <= csr_ctrl_sync_start_ff;
         end
     end
 end
@@ -877,7 +914,7 @@ end
 // [0x18] - STATUS - Live state. Read-only and never latched -- these reflect the current cycle, unlike the ERR register which latches.
 //------------------------------------------------------------------------------
 wire [31:0] csr_status_rdata;
-assign csr_status_rdata[15:2] = 14'h0;
+assign csr_status_rdata[15:3] = 13'h0;
 assign csr_status_rdata[31:24] = 8'h0;
 
 
@@ -926,6 +963,26 @@ always @(posedge clk) begin
         csr_status_frame_active_ff <= 1'b0;
     end else  begin
               begin            csr_status_frame_active_ff <= csr_status_frame_active_in;
+        end
+    end
+end
+
+
+//---------------------
+// Bit field:
+// STATUS[2] - SYNC_WAIT - 1 while the soft-start gate is holding the output off, waiting for an enabled layer to buffer a line. This is the register that distinguishes 'deliberately not started yet' from 'running and producing background', which are otherwise identical from outside. Always 0 when CTRL.SYNC_START is clear.
+// access: ro, hardware: i
+//---------------------
+reg  csr_status_sync_wait_ff;
+
+assign csr_status_rdata[2] = csr_status_sync_wait_ff;
+
+
+always @(posedge clk) begin
+    if (!rst) begin
+        csr_status_sync_wait_ff <= 1'b0;
+    end else  begin
+              begin            csr_status_sync_wait_ff <= csr_status_sync_wait_in;
         end
     end
 end
@@ -993,7 +1050,7 @@ end
 // [0x20] - ERR - Latched error flags. Hardware sets, software clears by writing 1 to the bit. Latched rather than live because every one of these is a transient that would otherwise be missed between two polls.
 //------------------------------------------------------------------------------
 wire [31:0] csr_err_rdata;
-assign csr_err_rdata[31:5] = 27'h0;
+assign csr_err_rdata[31:6] = 26'h0;
 
 wire csr_err_wen;
 assign csr_err_wen = wen && (waddr == 12'h20);
@@ -1138,6 +1195,33 @@ always @(posedge clk) begin
             end
         end else begin
             csr_err_out_stall_ff <= csr_err_out_stall_ff;
+        end
+    end
+end
+
+
+//---------------------
+// Bit field:
+// ERR[5] - SYNC_TO - The soft-start gate gave up: SYNC_TIMEOUT cycles elapsed with an enabled layer still short of a line, so the output was started anyway and that layer will be dropped until it catches up. Means a source did not come up, or cannot sustain the raster rate. Cannot latch while SYNC_TIMEOUT is 0, which waits indefinitely.
+// access: rw1c, hardware: s
+//---------------------
+reg  csr_err_sync_to_ff;
+
+assign csr_err_rdata[5] = csr_err_sync_to_ff;
+
+
+always @(posedge clk) begin
+    if (!rst) begin
+        csr_err_sync_to_ff <= 1'b0;
+    end else  begin
+        if (csr_err_sync_to_set) begin
+            csr_err_sync_to_ff <= 1'b1;
+        end else     if (csr_err_wen) begin
+            if (wstrb[0] && wdata[5]) begin
+                csr_err_sync_to_ff <= 1'b0;
+            end
+        end else begin
+            csr_err_sync_to_ff <= csr_err_sync_to_ff;
         end
     end
 end
@@ -1384,7 +1468,7 @@ end
 // [0x28] - IRQ_EN - Interrupt enable, one bit per ERR bit and in the same order. The irq output is the OR of (ERR & IRQ_EN), so it stays asserted until software clears the ERR bit.
 //------------------------------------------------------------------------------
 wire [31:0] csr_irq_en_rdata;
-assign csr_irq_en_rdata[31:5] = 27'h0;
+assign csr_irq_en_rdata[31:6] = 26'h0;
 
 wire csr_irq_en_wen;
 assign csr_irq_en_wen = wen && (waddr == 12'h28);
@@ -1529,6 +1613,32 @@ always @(posedge clk) begin
 end
 
 
+//---------------------
+// Bit field:
+// IRQ_EN[5] - SYNC_TO - Enable interrupt on ERR.SYNC_TO.
+// access: rw, hardware: o
+//---------------------
+reg  csr_irq_en_sync_to_ff;
+
+assign csr_irq_en_rdata[5] = csr_irq_en_sync_to_ff;
+
+assign csr_irq_en_sync_to_out = csr_irq_en_sync_to_ff;
+
+always @(posedge clk) begin
+    if (!rst) begin
+        csr_irq_en_sync_to_ff <= 1'b0;
+    end else  begin
+     if (csr_irq_en_wen) begin
+            if (wstrb[0]) begin
+                csr_irq_en_sync_to_ff <= wdata[5];
+            end
+        end else begin
+            csr_irq_en_sync_to_ff <= csr_irq_en_sync_to_ff;
+        end
+    end
+end
+
+
 //------------------------------------------------------------------------------
 // CSR:
 // [0x2c] - STALL_LIMIT - How long a stream may stay stalled before ERR.OUT_STALL or ERR.SRC_STALL latches, in clock cycles. Applies to both directions: the downstream sink holding TREADY low, and a layer source held backpressured on a full FIFO. Reset is 0x10000 -- comfortably longer than any legitimate gap, comfortably shorter than a frame.
@@ -1578,6 +1688,60 @@ always @(posedge clk) begin
             end
         end else begin
             csr_stall_limit_cycles_ff <= csr_stall_limit_cycles_ff;
+        end
+    end
+end
+
+
+//------------------------------------------------------------------------------
+// CSR:
+// [0x30] - SYNC_TIMEOUT - How long CTRL.SYNC_START will wait for an enabled layer to buffer a line before starting the output without it, in clock cycles. Reset is 0 -- wait indefinitely -- because that is the behaviour that makes a missing source obvious during bring-up: the output never starts, STATUS.SYNC_WAIT reads 1, and STATUS.LAYER_ARMED names the layer. In a deployed design set this to a few frame times instead, so one dead source degrades the picture rather than blacking it out; ERR.SYNC_TO then says it happened.
+//------------------------------------------------------------------------------
+wire [31:0] csr_sync_timeout_rdata;
+
+wire csr_sync_timeout_wen;
+assign csr_sync_timeout_wen = wen && (waddr == 12'h30);
+
+wire csr_sync_timeout_ren;
+assign csr_sync_timeout_ren = ren && (raddr == 12'h30);
+reg csr_sync_timeout_ren_ff;
+always @(posedge clk) begin
+    if (!rst) begin
+        csr_sync_timeout_ren_ff <= 1'b0;
+    end else begin
+        csr_sync_timeout_ren_ff <= csr_sync_timeout_ren;
+    end
+end
+//---------------------
+// Bit field:
+// SYNC_TIMEOUT[31:0] - CYCLES - 0 waits indefinitely.
+// access: rw, hardware: o
+//---------------------
+reg [31:0] csr_sync_timeout_cycles_ff;
+
+assign csr_sync_timeout_rdata[31:0] = csr_sync_timeout_cycles_ff;
+
+assign csr_sync_timeout_cycles_out = csr_sync_timeout_cycles_ff;
+
+always @(posedge clk) begin
+    if (!rst) begin
+        csr_sync_timeout_cycles_ff <= 32'h0;
+    end else  begin
+     if (csr_sync_timeout_wen) begin
+            if (wstrb[0]) begin
+                csr_sync_timeout_cycles_ff[7:0] <= wdata[7:0];
+            end
+            if (wstrb[1]) begin
+                csr_sync_timeout_cycles_ff[15:8] <= wdata[15:8];
+            end
+            if (wstrb[2]) begin
+                csr_sync_timeout_cycles_ff[23:16] <= wdata[23:16];
+            end
+            if (wstrb[3]) begin
+                csr_sync_timeout_cycles_ff[31:24] <= wdata[31:24];
+            end
+        end else begin
+            csr_sync_timeout_cycles_ff <= csr_sync_timeout_cycles_ff;
         end
     end
 end
@@ -4417,6 +4581,7 @@ always @(posedge clk) begin
             12'h24: rdata_ff <= csr_err_layer_rdata;
             12'h28: rdata_ff <= csr_irq_en_rdata;
             12'h2c: rdata_ff <= csr_stall_limit_rdata;
+            12'h30: rdata_ff <= csr_sync_timeout_rdata;
             12'h40: rdata_ff <= csr_l0_ctrl_rdata;
             12'h44: rdata_ff <= csr_l0_pos_rdata;
             12'h48: rdata_ff <= csr_l0_size_rdata;

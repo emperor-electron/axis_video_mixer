@@ -53,6 +53,14 @@ latches, and the raster carries on. A video sink downstream loses lock if the
 stream pauses, so a starving source must not be allowed to take the display down
 with it. The layer flushes and rejoins on its own once its source resumes.
 
+**But it waits before it starts.** That rule is about a frame in flight, not
+about when a frame may begin. `CTRL.SYNC_START`, on by default, holds the output
+off until every enabled layer has a line buffered — which removes the one case
+the drop rule handles badly: a window touching the canvas origin has no slack at
+all to fetch its first pixel, so an only-just-fast-enough source starves on beat
+zero of every frame and never recovers. `STATUS.SYNC_WAIT` says it is waiting
+and `SYNC_TIMEOUT` bounds the wait. See [doc/design.md](doc/design.md) §13.6.
+
 **Geometry is double buffered.** Position, size, enable and alpha are latched at
 a frame boundary and only there, so a window can be moved whenever software
 likes without tearing the frame in flight.
@@ -182,15 +190,16 @@ C header in [sw/axis_video_mixer_regs.h](sw/axis_video_mixer_regs.h).
 | `0x00` | `ID` | `0x4D58` ('MX'), major, minor |
 | `0x04` | `CAPS` | layer count, FIFO depth, output format, component width, pixels per beat |
 | `0x08` | `SCRATCH` | proves the bus without changing the picture |
-| `0x0C` | `CTRL` | `EN`, `SOFT_RST` |
+| `0x0C` | `CTRL` | `EN`, `SYNC_START`, `SOFT_RST` |
 | `0x10` | `CANVAS` | output width and height |
 | `0x14` | `BACKGROUND` | colour under every layer |
-| `0x18` | `STATUS` | live: `ERR_ANY`, `FRAME_ACTIVE`, `LAYER_ARMED` |
+| `0x18` | `STATUS` | live: `ERR_ANY`, `FRAME_ACTIVE`, `SYNC_WAIT`, `LAYER_ARMED` |
 | `0x1C` | `FRAME_COUNT` | output frames since reset |
 | `0x20` | `ERR` | latched faults, write 1 to clear |
 | `0x24` | `ERR_LAYER` | which layer, one bit each, write 1 to clear |
 | `0x28` | `IRQ_EN` | mask onto `irq` |
 | `0x2C` | `STALL_LIMIT` | watchdog threshold, 0 disables |
+| `0x30` | `SYNC_TIMEOUT` | how long `SYNC_START` waits, 0 waits indefinitely |
 | `0x40 + 0x10*i` | `L<i>_CTRL/POS/SIZE/STATUS` | per layer, `i` = 0..7 |
 
 ### Errors
@@ -205,6 +214,7 @@ transient that would otherwise fall between two polls.
 | 2 | `GEOM` | A layer's `TLAST`/`TUSER` disagreed with its `SIZE`. That layer resynchronises |
 | 3 | `SRC_STALL` | A layer source was backpressured for longer than `STALL_LIMIT` — it is producing faster than the mixer consumes |
 | 4 | `OUT_STALL` | The sink held `TREADY` low longer than `STALL_LIMIT` |
+| 5 | `SYNC_TO` | `SYNC_START` gave up on a layer after `SYNC_TIMEOUT` and started without it |
 
 `SRC_STALL` and `OUT_STALL` are deliberately a symmetric pair: between them, a
 stuck `FRAME_COUNT` can be attributed to the right side of the pipeline instead
@@ -222,9 +232,20 @@ of merely observed.
 6. Write CTRL.EN
 ```
 
-Steps 5 and 6 are in that order for a reason. Enabling first is perfectly legal
-— layers join at the next frame boundary — but the first frame is then
-background only. That is correct behaviour that looks exactly like a fault.
+Steps 5 and 6 matter less than they used to, because `CTRL.SYNC_START` is on by
+default: the mixer holds the output off until the layers are ready, so enabling
+before the sources are up no longer costs you a background frame. With
+`SYNC_START` cleared the old advice applies — enabling first is perfectly legal,
+layers join at the next frame boundary, but the first frame is background only,
+and that is correct behaviour which looks exactly like a fault.
+
+**If a layer you are driving does not appear on the output**, there are five
+causes and they are distinguishable from the registers alone.
+[doc/design.md](doc/design.md) §13.3 is a decision procedure for it, and
+`tb/smoke` is the runnable version. The one worth knowing in advance: a source
+that leaves its alpha byte at zero produces a perfectly transparent layer, and
+every status register reads healthy while the output is background to the bit.
+Set `L<i>_CTRL.ALPHA_SRC = GLOBAL_ONLY` if your source has no real alpha.
 
 While `EN` is 0 the mixer applies configuration immediately, because there is no
 frame in flight to protect; once enabled it defers changes to frame boundaries.
@@ -249,6 +270,15 @@ make ch-sweep             # the regression at CH_W 8, 10, 12 and 16
 make NUM_LAYERS=8 regress
 make TEST=mixer_starve_test
 ```
+
+```bash
+cd tb/smoke && make       # output-path scenarios, Verilator only, no licence
+```
+
+`tb/smoke` is the five ways of getting background on the output, one scenario
+each, printing the register signature each produces. It drives the core
+directly rather than through AXI4-Lite, needs nothing but Verilator, and is
+what backs the table in [doc/design.md](doc/design.md) §13.3.
 
 The default canvas is 64x8, so a frame is 512 beats and the regression runs in
 moments. The simulation FIFO is 128 deep rather than 2048 — a shallow buffer is
@@ -351,6 +381,7 @@ src/generated/                   corsair output + the generated array adapter
 src/axis_video_mixer.f           drop-in filelist
 regs/gen_regs.py                 emits regs.json AND the adapter, sized for 8 layers
 tb/                              UVM environment, reusing axi_stream_uvc and axi_lite
+tb/smoke/                        output-path scenarios under Verilator, no UVM needed
 formal/                          SymbiYosys proofs; properties bound in, not inlined
 ```
 

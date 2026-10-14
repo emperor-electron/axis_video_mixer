@@ -18,7 +18,7 @@ extern "C" {
 
 // ID - Identification and version. Read-only constants, so a correct read here proves the AXI4-Lite path reaches this block before any other register is trusted.
 #define MIXER_ID_ADDR 0x0
-#define MIXER_ID_RESET 0x4d580101
+#define MIXER_ID_RESET 0x4d580102
 typedef struct {
     uint32_t VER_MINOR : 8; // Minor version. Increment on backwards-compatible additions.
     uint32_t VER_MAJOR : 8; // Major version. Increment on any incompatible map change.
@@ -29,7 +29,7 @@ typedef struct {
 #define MIXER_ID_VER_MINOR_WIDTH 8
 #define MIXER_ID_VER_MINOR_LSB 0
 #define MIXER_ID_VER_MINOR_MASK 0xff
-#define MIXER_ID_VER_MINOR_RESET 0x1
+#define MIXER_ID_VER_MINOR_RESET 0x2
 
 // ID.VER_MAJOR - Major version. Increment on any incompatible map change.
 #define MIXER_ID_VER_MAJOR_WIDTH 8
@@ -99,10 +99,11 @@ typedef struct {
 
 // CTRL - Global mixer control.
 #define MIXER_CTRL_ADDR 0xc
-#define MIXER_CTRL_RESET 0x0
+#define MIXER_CTRL_RESET 0x2
 typedef struct {
     uint32_t EN : 1; // Enable the output stream. While 0 the mixer holds TVALID low and accepts and discards nothing -- layer inputs are backpressured. Set the canvas and layer geometry first, then set this.
-    uint32_t : 7; // reserved
+    uint32_t SYNC_START : 1; // Hold the output off until every enabled layer has a full line of its own buffered, then start. Removes the case the drop rule handles badly: a window touching the canvas origin needs its first pixel on the first beat of a frame and has no slack to fetch it, so an only-just-fast-enough source starves on beat zero of every frame and never recovers. While waiting, STATUS.SYNC_WAIT reads 1 and LAYER_ARMED names who is holding things up. Bound the wait with SYNC_TIMEOUT. Clear this bit for the free-running behaviour: output begins as soon as EN and a legal canvas are set, whatever the layers are doing.
+    uint32_t : 6; // reserved
     uint32_t SOFT_RST : 1; // Write 1 to resynchronise the whole datapath: flush every layer FIFO, drop to the top of a new output frame, and re-arm each layer at its next input SOF. Self-clearing; does not touch configuration registers.
     uint32_t : 23; // reserved
 } mixer_ctrl_t;
@@ -112,6 +113,12 @@ typedef struct {
 #define MIXER_CTRL_EN_LSB 0
 #define MIXER_CTRL_EN_MASK 0x1
 #define MIXER_CTRL_EN_RESET 0x0
+
+// CTRL.SYNC_START - Hold the output off until every enabled layer has a full line of its own buffered, then start. Removes the case the drop rule handles badly: a window touching the canvas origin needs its first pixel on the first beat of a frame and has no slack to fetch it, so an only-just-fast-enough source starves on beat zero of every frame and never recovers. While waiting, STATUS.SYNC_WAIT reads 1 and LAYER_ARMED names who is holding things up. Bound the wait with SYNC_TIMEOUT. Clear this bit for the free-running behaviour: output begins as soon as EN and a legal canvas are set, whatever the layers are doing.
+#define MIXER_CTRL_SYNC_START_WIDTH 1
+#define MIXER_CTRL_SYNC_START_LSB 1
+#define MIXER_CTRL_SYNC_START_MASK 0x2
+#define MIXER_CTRL_SYNC_START_RESET 0x1
 
 // CTRL.SOFT_RST - Write 1 to resynchronise the whole datapath: flush every layer FIFO, drop to the top of a new output frame, and re-arm each layer at its next input SOF. Self-clearing; does not touch configuration registers.
 #define MIXER_CTRL_SOFT_RST_WIDTH 1
@@ -159,7 +166,8 @@ typedef struct {
 typedef struct {
     uint32_t ERR_ANY : 1; // 1 while any bit in ERR is set. Lets a polling loop check one register instead of two.
     uint32_t FRAME_ACTIVE : 1; // 1 while the output is mid-frame (between SOF and the last pixel of the last line).
-    uint32_t : 14; // reserved
+    uint32_t SYNC_WAIT : 1; // 1 while the soft-start gate is holding the output off, waiting for an enabled layer to buffer a line. This is the register that distinguishes 'deliberately not started yet' from 'running and producing background', which are otherwise identical from outside. Always 0 when CTRL.SYNC_START is clear.
+    uint32_t : 13; // reserved
     uint32_t LAYER_ARMED : 8; // One bit per layer: 1 once that layer has seen its input SOF and is delivering pixels. A layer that stays 0 is not receiving a stream.
     uint32_t : 8; // reserved
 } mixer_status_t;
@@ -175,6 +183,12 @@ typedef struct {
 #define MIXER_STATUS_FRAME_ACTIVE_LSB 1
 #define MIXER_STATUS_FRAME_ACTIVE_MASK 0x2
 #define MIXER_STATUS_FRAME_ACTIVE_RESET 0x0
+
+// STATUS.SYNC_WAIT - 1 while the soft-start gate is holding the output off, waiting for an enabled layer to buffer a line. This is the register that distinguishes 'deliberately not started yet' from 'running and producing background', which are otherwise identical from outside. Always 0 when CTRL.SYNC_START is clear.
+#define MIXER_STATUS_SYNC_WAIT_WIDTH 1
+#define MIXER_STATUS_SYNC_WAIT_LSB 2
+#define MIXER_STATUS_SYNC_WAIT_MASK 0x4
+#define MIXER_STATUS_SYNC_WAIT_RESET 0x0
 
 // STATUS.LAYER_ARMED - One bit per layer: 1 once that layer has seen its input SOF and is delivering pixels. A layer that stays 0 is not receiving a stream.
 #define MIXER_STATUS_LAYER_ARMED_WIDTH 8
@@ -204,7 +218,8 @@ typedef struct {
     uint32_t GEOM : 1; // A layer's stream geometry disagreed with its SIZE register -- TLAST arrived somewhere other than the configured last pixel of a line, or TUSER somewhere other than the first pixel of a frame. That layer resynchronises at its next input SOF.
     uint32_t SRC_STALL : 1; // A layer input was held backpressured -- TVALID high, TREADY low because its FIFO was full -- for longer than STALL_LIMIT cycles. The mirror image of OUT_STALL: that source is producing faster than the mixer consumes, which in practice means a frame rate mismatch. Harmless in short bursts, which is why it is measured against a threshold rather than flagged on the first stalled cycle.
     uint32_t OUT_STALL : 1; // The downstream sink held TREADY low for longer than the stall threshold while the mixer had a beat to give. Distinguishes 'the display pipeline is blocked' from 'a source is starving', which look identical from a stuck FRAME_COUNT alone.
-    uint32_t : 27; // reserved
+    uint32_t SYNC_TO : 1; // The soft-start gate gave up: SYNC_TIMEOUT cycles elapsed with an enabled layer still short of a line, so the output was started anyway and that layer will be dropped until it catches up. Means a source did not come up, or cannot sustain the raster rate. Cannot latch while SYNC_TIMEOUT is 0, which waits indefinitely.
+    uint32_t : 26; // reserved
 } mixer_err_t;
 
 // ERR.CFG - Configuration rejected: canvas width or height is zero, or an enabled layer's window is zero-sized or extends past the canvas edge. The offending layer is flagged in ERR_LAYER; a canvas fault sets this bit alone. The mixer keeps running on the last valid configuration.
@@ -236,6 +251,12 @@ typedef struct {
 #define MIXER_ERR_OUT_STALL_LSB 4
 #define MIXER_ERR_OUT_STALL_MASK 0x10
 #define MIXER_ERR_OUT_STALL_RESET 0x0
+
+// ERR.SYNC_TO - The soft-start gate gave up: SYNC_TIMEOUT cycles elapsed with an enabled layer still short of a line, so the output was started anyway and that layer will be dropped until it catches up. Means a source did not come up, or cannot sustain the raster rate. Cannot latch while SYNC_TIMEOUT is 0, which waits indefinitely.
+#define MIXER_ERR_SYNC_TO_WIDTH 1
+#define MIXER_ERR_SYNC_TO_LSB 5
+#define MIXER_ERR_SYNC_TO_MASK 0x20
+#define MIXER_ERR_SYNC_TO_RESET 0x0
 
 // ERR_LAYER - One latched bit per layer, set alongside the per-layer causes in ERR. Names which input is at fault without having to read every layer's status register. Write 1 to a bit to clear that layer alone.
 #define MIXER_ERR_LAYER_ADDR 0x24
@@ -309,7 +330,8 @@ typedef struct {
     uint32_t GEOM : 1; // Enable interrupt on ERR.GEOM.
     uint32_t SRC_STALL : 1; // Enable interrupt on ERR.SRC_STALL.
     uint32_t OUT_STALL : 1; // Enable interrupt on ERR.OUT_STALL.
-    uint32_t : 27; // reserved
+    uint32_t SYNC_TO : 1; // Enable interrupt on ERR.SYNC_TO.
+    uint32_t : 26; // reserved
 } mixer_irq_en_t;
 
 // IRQ_EN.CFG - Enable interrupt on ERR.CFG.
@@ -342,6 +364,12 @@ typedef struct {
 #define MIXER_IRQ_EN_OUT_STALL_MASK 0x10
 #define MIXER_IRQ_EN_OUT_STALL_RESET 0x0
 
+// IRQ_EN.SYNC_TO - Enable interrupt on ERR.SYNC_TO.
+#define MIXER_IRQ_EN_SYNC_TO_WIDTH 1
+#define MIXER_IRQ_EN_SYNC_TO_LSB 5
+#define MIXER_IRQ_EN_SYNC_TO_MASK 0x20
+#define MIXER_IRQ_EN_SYNC_TO_RESET 0x0
+
 // STALL_LIMIT - How long a stream may stay stalled before ERR.OUT_STALL or ERR.SRC_STALL latches, in clock cycles. Applies to both directions: the downstream sink holding TREADY low, and a layer source held backpressured on a full FIFO. Reset is 0x10000 -- comfortably longer than any legitimate gap, comfortably shorter than a frame.
 #define MIXER_STALL_LIMIT_ADDR 0x2c
 #define MIXER_STALL_LIMIT_RESET 0x10000
@@ -354,6 +382,19 @@ typedef struct {
 #define MIXER_STALL_LIMIT_CYCLES_LSB 0
 #define MIXER_STALL_LIMIT_CYCLES_MASK 0xffffffff
 #define MIXER_STALL_LIMIT_CYCLES_RESET 0x10000
+
+// SYNC_TIMEOUT - How long CTRL.SYNC_START will wait for an enabled layer to buffer a line before starting the output without it, in clock cycles. Reset is 0 -- wait indefinitely -- because that is the behaviour that makes a missing source obvious during bring-up: the output never starts, STATUS.SYNC_WAIT reads 1, and STATUS.LAYER_ARMED names the layer. In a deployed design set this to a few frame times instead, so one dead source degrades the picture rather than blacking it out; ERR.SYNC_TO then says it happened.
+#define MIXER_SYNC_TIMEOUT_ADDR 0x30
+#define MIXER_SYNC_TIMEOUT_RESET 0x0
+typedef struct {
+    uint32_t CYCLES : 32; // 0 waits indefinitely.
+} mixer_sync_timeout_t;
+
+// SYNC_TIMEOUT.CYCLES - 0 waits indefinitely.
+#define MIXER_SYNC_TIMEOUT_CYCLES_WIDTH 32
+#define MIXER_SYNC_TIMEOUT_CYCLES_LSB 0
+#define MIXER_SYNC_TIMEOUT_CYCLES_MASK 0xffffffff
+#define MIXER_SYNC_TIMEOUT_CYCLES_RESET 0x0
 
 // L0_CTRL - Layer 0 enable and alpha. Takes effect at the next output frame boundary.
 #define MIXER_L0_CTRL_ADDR 0x40
@@ -1270,7 +1311,11 @@ typedef struct {
         __IO uint32_t STALL_LIMIT; // How long a stream may stay stalled before ERR.OUT_STALL or ERR.SRC_STALL latches, in clock cycles. Applies to both directions: the downstream sink holding TREADY low, and a layer source held backpressured on a full FIFO. Reset is 0x10000 -- comfortably longer than any legitimate gap, comfortably shorter than a frame.
         __IO mixer_stall_limit_t STALL_LIMIT_bf; // Bit access for STALL_LIMIT register
     };
-    __IO uint32_t RESERVED0[4];
+    union {
+        __IO uint32_t SYNC_TIMEOUT; // How long CTRL.SYNC_START will wait for an enabled layer to buffer a line before starting the output without it, in clock cycles. Reset is 0 -- wait indefinitely -- because that is the behaviour that makes a missing source obvious during bring-up: the output never starts, STATUS.SYNC_WAIT reads 1, and STATUS.LAYER_ARMED names the layer. In a deployed design set this to a few frame times instead, so one dead source degrades the picture rather than blacking it out; ERR.SYNC_TO then says it happened.
+        __IO mixer_sync_timeout_t SYNC_TIMEOUT_bf; // Bit access for SYNC_TIMEOUT register
+    };
+    __IO uint32_t RESERVED0[3];
     union {
         __IO uint32_t L0_CTRL; // Layer 0 enable and alpha. Takes effect at the next output frame boundary.
         __IO mixer_l0_ctrl_t L0_CTRL_bf; // Bit access for L0_CTRL register

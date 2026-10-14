@@ -65,6 +65,7 @@ module fv_core_props #(
     input logic        pipe_en,
     input logic        frame_boundary,
     input logic        frame_latch,
+    input logic        sync_wait,
 
     // Active configuration.
     input logic                    act_ok,
@@ -223,6 +224,22 @@ module fv_core_props #(
     // anywhere else.
     if (ran && (!ctrl_en_d || !act_ok)) begin
       a_raster_parked : assert ((out_bx == 16'd0) && (out_y == 16'd0));
+    end
+
+    // The same lemma for the third latch path. Soft start adds sync_wait to
+    // frame_latch, so while the gate is shut the canvas is being re-latched
+    // every cycle -- and an arbitrary induction start state will happily
+    // present a shut gate with the raster part way across a wide canvas, then
+    // install a narrow one and break the bound below on a state the design
+    // cannot reach.
+    //
+    // It cannot reach it because sync_wait is only ever raised from reset or at
+    // frame_boundary, and on that same edge the raster register wraps to the
+    // origin. So unlike ctrl_en above, this one is checked LIVE rather than
+    // delayed: by the first cycle in which sync_wait reads 1, the wrap has
+    // already happened.
+    if (ran && sync_wait) begin
+      a_raster_parked_while_gated : assert ((out_bx == 16'd0) && (out_y == 16'd0));
     end
 
     // A usable canvas is at least one beat by one line. act_ok is only ever

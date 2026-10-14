@@ -46,7 +46,7 @@
 #
 # deep is depth 12 rather than 16 for the same reason, and the reason is worth
 # recording because it is where the limit actually is. Per-step BMC cost climbs
-# steeply past step 13 at 16 bits: depth 12 takes 103 s, and depth 16 had not
+# steeply past step 13 at 16 bits: depth 12 takes 239 s, and depth 16 had not
 # cleared step 14 after six minutes. Twelve steps still puts several output
 # beats through a four-stage pipeline, which is what the property needs.
 #   only fv_core_frame bound

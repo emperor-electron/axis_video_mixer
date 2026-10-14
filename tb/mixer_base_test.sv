@@ -55,7 +55,7 @@ class mixer_base_test extends uvm_test;
   extern virtual task configure_layer(int unsigned i, bit en, int unsigned lx, int unsigned ly,
                                       int unsigned lw, int unsigned lh, logic [7:0] alpha,
                                       bit alpha_src = 1'b0);
-  extern virtual task start_mixer();
+  extern virtual task start_mixer(bit sync_start = 1'b0);
   extern virtual task wait_layers_armed(int unsigned timeout_cycles = 20000);
   extern virtual task wait_frames(int unsigned target, int unsigned timeout_cycles = 400000);
 
@@ -256,8 +256,18 @@ task mixer_base_test::configure_layer(int unsigned i, bit en, int unsigned lx,
 endtask : configure_layer
 
 
-task mixer_base_test::start_mixer();
-  reg_write(REG_CTRL, 32'h0000_0001);  // EN
+// CTRL.SYNC_START is cleared deliberately, not by omission. Soft start holds
+// the output off until every enabled layer has a line buffered, and almost
+// every test here drives its layers from a sequence that starts after the
+// mixer does -- so the default-on behaviour would mean the scoreboard's first
+// expected frames never arrive. The gate is covered in tb/smoke instead, where
+// the hold-off is the thing being measured rather than an obstacle.
+//
+// Pass sync_start to exercise it, and remember SYNC_TIMEOUT resets to 0, which
+// waits indefinitely: a test that enables a layer it never feeds will hang
+// rather than fail, so set a timeout alongside it.
+task mixer_base_test::start_mixer(bit sync_start = 1'b0);
+  reg_write(REG_CTRL, {30'd0, sync_start, 1'b1});  // SYNC_START, EN
 endtask : start_mixer
 
 

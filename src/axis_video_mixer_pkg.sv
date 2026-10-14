@@ -60,7 +60,7 @@ package axis_video_mixer_pkg;
   // Identification, mirrored from regs/gen_regs.py.
   localparam logic [15:0] MIXER_MAGIC = 16'h4D58;  // ASCII 'MX'
   localparam logic [ 7:0] MIXER_VER_MAJOR = 8'd1;
-  localparam logic [ 7:0] MIXER_VER_MINOR = 8'd1;  // 1: 8 streams, 10/12/16-bit components
+  localparam logic [ 7:0] MIXER_VER_MINOR = 8'd2;  // 2: soft start (CTRL.SYNC_START)
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Legal parameter values

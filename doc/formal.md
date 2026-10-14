@@ -387,6 +387,13 @@ advance when it should not, so a beat is never emitted twice.
 positive form of the same claim — once the pipeline has filled, output is
 continuous — and is bounded, because it needs a counter.
 
+Its guard excludes `sync_wait`, the soft-start gate. That is not a weakening:
+the claim has always been about a frame *in flight*, and soft start is about
+when a frame may *begin* (doc/design.md §13.6). Leave the term out and the
+property asserts that soft start does not exist. The thing that keeps the
+original claim intact is in the RTL rather than here — `sync_wait` is only ever
+raised from reset or at `frame_boundary`, never mid-frame.
+
 **`a_active_window_*`** — no window that is misaligned or outside the canvas can
 ever become active. This is not a restatement of the validation logic, and the
 reason is worth being precise about: `win_ok` is evaluated against the *shadow*
@@ -519,7 +526,9 @@ properties at `P_CH_W = 16`, the widest beat the block carries — the wire
 properties compare whole beats, so the width is the one thing at this level
 that they are sensitive to.
 
-### One finding worth recording
+### Three findings worth recording
+
+#### One: the captured write address
 
 `a_write_responds` failed on the first run, and the counterexample was not a
 bug in the property.
@@ -544,6 +553,45 @@ address it has already lost.
 tightening it until it broke, which means a regeneration that makes the
 register block slower fails this task instead of silently costing every driver
 a cycle per register access.
+
+#### Two: a lemma that had to grow, from adding soft start
+
+`a_raster_in_canvas` — the raster stays on the canvas — failed k-induction the
+first time `fv_core prove` ran against the soft-start gate, and it was not a
+bug either.
+
+`props/fv_core_props.sv` already carried `a_raster_parked` as a lemma, with a
+comment explaining precisely this hazard: the canvas is latched not only at a
+frame boundary but also on the paths that mean "there is no frame to protect",
+and an arbitrary induction start state will present a stale raster part way
+across a wide canvas, latch a narrow one, and break the bound on a state the
+design cannot reach. Soft start adds a *third* such path — `sync_wait` joins
+`!act_ok` and `!ctrl_en` in `frame_latch` — so the lemma had to grow a third
+case, `a_raster_parked_while_gated`.
+
+The new case is checked live rather than delayed, unlike the `ctrl_en` one:
+`sync_wait` is only raised at `frame_boundary`, and on that same edge the raster
+register wraps to the origin, so by the first cycle in which `sync_wait` reads 1
+the wrap has already happened.
+
+Worth recording for the shape of it rather than the detail. Induction failing
+after an RTL change is, far more often than not, a reachable-state invariant
+that the new state broke rather than a defect — and the cost of saying it out
+loud was not just a pass but a faster one: 67 s failing became 4 s proving.
+
+#### Three: a property that hard-coded a width
+
+`a_irq_is_masked_or` — `irq` is exactly the masked OR of the latched errors —
+failed BMC outright when `ERR.SYNC_TO` was added. A real counterexample against
+correct RTL: `fv_axil_props` carried `parameter int P_NUM_ERR = 5`, so it
+truncated the adapter's six-bit `err_ff` to five, and an interrupt raised by the
+sixth bit was invisible to the model it was being compared against.
+
+The property now takes the width from the thing it is checking —
+`.P_NUM_ERR($bits(err_ff))` in `fv_axil_bind.sv`. Worth the note because a
+property that hard-codes the size of what it checks does not fail when it goes
+stale; it fails one release *later*, against RTL that is fine, and the time goes
+into the wrong file.
 
 ---
 
@@ -574,12 +622,12 @@ reject rather than draw.
 
 ## 9. Results
 
-154 assertion statements, 49 cover statements and 15 assumptions across five
+155 assertion statements, 49 cover statements and 15 assumptions across five
 proofs and 49 tasks. Assertions inside per-layer and per-lane generate loops
 are elaborated once per instance, so the checked count is higher.
 
 ```bash
-make -C formal            # everything, about four and three-quarter minutes from clean
+make -C formal            # everything, about six minutes from clean
 make -C formal quick      # every bmc task plus the cheap blend groups, ~30 s
 make -C formal core TASKS=prove
 make -C formal blend TASKS="div16 up16"
@@ -588,14 +636,14 @@ make -C formal blend TASKS="div16 up16"
 | Unit | Tasks | Result | Wall |
 |---|---|---|---|
 | `fv_blend` | `div` `scale` `blend` `mono` `up` `cover`, each at 8, 10, 12 and 16 bits | pass | ~5 s each |
-| `fv_blend` | `num8` `bound8` | pass | 37 s, 63 s |
+| `fv_blend` | `num8` `bound8` | pass | 49 s, 81 s |
 | `fv_fifo` | `bmc` `prove` `order` `cover` `depth` | pass | ~5 s |
 | `fv_layer` | `bmc` `prove` `align` `watchdog` `cover` `ppc` | pass | ~5 s |
 | `fv_core` | `bmc` `prove` `ppc` `cover` | pass | ~15 s |
-| `fv_core` | `frame` `deep` `datapath` | pass | 66 s, 118 s, 173 s |
+| `fv_core` | `frame` `deep` `datapath` | pass | 89 s, 239 s, 234 s |
 | `fv_top` | `bmc` `prove` `wire8` `deep` `cover` | pass | ~25 s |
 
-Four and three-quarter minutes for the whole suite from clean on one machine, most of
+Just under six minutes for the whole suite from clean on one machine, most of
 it the three `fv_core` outliers; `sby` runs the tasks of one file in parallel,
 so a unit costs its slowest task rather than the sum. `make quick` is the
 subset worth running while editing RTL and takes just over thirty seconds —
@@ -608,6 +656,12 @@ ones took `blend10` from 322 s to 1 s, which is most of why running four widths
 costs no more than running one used to. §4 is what those two groups are and why
 they run at 8 bits alone.
 
+Soft start made those three outliers dearer — `deep` roughly doubled — because
+`sync_cnt` is 32 bits of state the solver now carries through every step. The
+`fv_core prove` task went the other way: adding the `a_raster_parked_while_gated`
+lemma took it from failing in 67 s to proving in 6 s, which is the usual shape of
+a good lemma.
+
 `fv_core frame`, `deep` and `datapath` are worth a note: per-step BMC cost
 climbs steeply past step 13 there, so the depth, the canvas size and in one
 case the component width are all held down hard, and the `.sby` header lists
@@ -616,8 +670,9 @@ useful of them — freezing the pixel data for the framing check, which reads
 `TUSER`, `TLAST` and the handshakes and never a pixel, halves that task's
 runtime by keeping the blend cascade's operands out of the unrolling. `deep` is
 the same property as `datapath` at `P_CH_W = 16` and runs at depth 12 rather
-than 16 for the same reason: 103 s at twelve steps, and step 14 had not cleared
-after six minutes.
+than 16 for the same reason: twelve steps was 103 s when that choice was made
+and is 239 s now that soft start has added state, while step 14 had not cleared
+after ten minutes even before it.
 
 `prove` tasks are unbounded k-induction. `bmc`, `order`, `align`, `frame`,
 `datapath`, `deep`, `wire8` and `watchdog` are bounded model checking from

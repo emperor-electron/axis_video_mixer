@@ -6,7 +6,9 @@ re-implemented from scratch rather than read. Diagrams are in
 it diffs.
 
 Sections 3 and 4 are the ones worth reading slowly. Everything else is
-bookkeeping by comparison.
+bookkeeping by comparison. If you are bringing the block up and a layer you are
+driving is not appearing on the output, go straight to §13.3 — it is a decision
+procedure for exactly that.
 
 ---
 
@@ -41,15 +43,16 @@ Numbered so the verification plan in §8 can cite them.
 | **R3** | No scaling. A layer's stream must arrive at exactly the size its `Ln_SIZE` declares. |
 | **R4** | Per-layer alpha from a register, optionally multiplied by the pixel's own alpha channel. |
 | **R5** | Z-order is fixed by port index: layer 0 nearest the background, highest-numbered on top. |
-| **R6** | **The output stream never stalls waiting on an input.** A layer with no pixel available when its window opens is dropped for the remainder of that frame. |
+| **R6** | **The output stream never stalls waiting on an input.** A layer with no pixel available when its window opens is dropped for the remainder of that frame. Applies to a frame in flight; see R15 for when a frame may begin. |
 | **R7** | Configuration changes take effect at an output frame boundary, never mid-frame. |
-| **R8** | Every fault is latched, attributable to a layer, and clearable: `CFG`, `STARVE`, `GEOM`, `SRC_STALL`, `OUT_STALL`. |
+| **R8** | Every fault is latched, attributable to a layer, and clearable: `CFG`, `STARVE`, `GEOM`, `SRC_STALL`, `OUT_STALL`, `SYNC_TO`. |
 | **R9** | Single clock domain — every input stream, the output, and the AXI4-Lite port. |
 | **R10** | `N` is a parameter. One register map covers every `N`: it is generated for the maximum, and `CAPS.NUM_LAYERS` reports what was built. |
 | **R11** | `P_PPC` ∈ {1, 2, 4, 8} pixels per beat, on **every** stream — all `N` inputs and the output. Lane 0 in the least significant bits. |
 | **R12** | Horizontal geometry — `CANVAS.WIDTH`, every `Ln_POS.X`, every `Ln_SIZE.WIDTH` — must be a multiple of `P_PPC`. A value that is not is **rejected** with `ERR.CFG`, never rounded. `CAPS.PPC` reports the granularity. |
 | **R13** | Every signal of every input stream is its own named port. Nothing is packed across streams, and all eight stream port sets exist in every build. |
 | **R14** | `P_CH_W` ∈ {8, 10, 12, 16} bits per colour component, on **every** stream. The blend divides by `2**P_CH_W - 1`, so an alpha of full scale returns the top colour exactly at every width. `CAPS.CH_W` reports it. |
+| **R15** | The output may be held off at the **start** of a frame until every enabled layer has a line buffered (`CTRL.SYNC_START`, default on), bounded by `SYNC_TIMEOUT` and reported in `STATUS.SYNC_WAIT`. This refines R6 and does not contradict it: R6 governs a frame in flight. |
 
 ### 1.2 Explicit non-goals
 
@@ -173,6 +176,10 @@ holds `TREADY` low while the pipe is empty freezes the raster for no reason, and
 you lose the fill time you needed in order to have data ready the moment
 `TREADY` returns. With it, the pipe fills behind a stalled sink and delivers on
 the first ready cycle.
+
+What `TVALID`, `TDATA`, `TUSER` and `TLAST` are actually driven from — and why
+a healthy-looking output stream says nothing about whether your layers are
+working — is §13.
 
 **`pipe_en` must gate every piece of datapath state:**
 
@@ -408,6 +415,7 @@ Everything load-bearing in one place.
 pipe_en   = m_axis_tready || !m_axis_tvalid;   // gates ALL datapath state
 s_tready  = enable ? !fifo_full : 1'b1;        // drain a disabled layer
 m_tvalid  = v_q[N];                            // registered. never from tready
+s0_valid  = ctrl_en && act_ok && !sync_wait;   // may the raster advance at all
 
 // ---- consuming a layer (beat domain; at PPC=1 a beat is a pixel) -------
 out_bx    = beat index across the canvas, 0 .. W/P - 1
@@ -422,7 +430,12 @@ if (frame_latch) lay_active[i] <= lay_armed[i] && want_en[i] && !lay_flush[i];
 
 // ---- double buffering -------------------------------------------------
 frame_boundary = soft_rst || (pipe_en && s0_valid && s0_eof);
-frame_latch    = frame_boundary || !act_ok || !ctrl_en;   // last two terms matter
+frame_latch    = frame_boundary || !act_ok || !ctrl_en || sync_wait;  // last 3 matter
+
+// ---- soft start -------------------------------------------------------
+prefilled[i] = lay_armed[i] && lay_level[i] >= min(act_bw_l[i], FIFO_DEPTH);
+sync_hold    = |(act_en & ~prefilled);
+sync_wait   <= raised from RESET or at frame_boundary ONLY -- never mid-frame
 
 // ---- FIFO prefetch ----------------------------------------------------
 mem_rd_en = (rd_ptr != wr_ptr) && (!rd_valid || rd_en);
@@ -454,15 +467,25 @@ adding a global register never renumbers a layer register. Software reads
 `CAPS.NUM_LAYERS` and stops there; the blocks above it are writable and
 readable and connected to nothing.
 
+`ID.VER_MINOR` is 2. The soft-start registers — `CTRL.SYNC_START`,
+`SYNC_TIMEOUT` at `0x30`, `STATUS.SYNC_WAIT`, `ERR.SYNC_TO` and
+`IRQ_EN.SYNC_TO` — were the additions that took it there; §13.6 is what they
+do. All five are backwards compatible except for one thing worth noticing:
+**`CTRL`'s reset value is now `0x2`, not `0x0`**, because `SYNC_START` defaults
+on.
+
 ### 6.1 Double buffering
 
 ```systemverilog
 assign frame_boundary = soft_rst || (pipe_en && s0_valid && s0_eof);
-assign frame_latch    = frame_boundary || !act_ok || !ctrl_en;
+assign frame_latch    = frame_boundary || !act_ok || !ctrl_en || sync_wait;
 ```
 
 Everything geometric is latched at `frame_latch` into `act_*` registers, and the
 datapath reads only those (R7).
+
+`sync_wait` is in that list for the same reason `!ctrl_en` is, and it is load
+bearing for the same reason — see §13.6.
 
 **The `!ctrl_en` term is not tidiness — it is a bug fix.** A disabled mixer does
 not advance its raster, so it never reaches a frame boundary. Without that term,
@@ -514,7 +537,17 @@ falls.
 
 ### 8.1 Simulation
 
-`cd tb && make regress`. Nine tests; the ones that earn their place:
+Two benches, for two different jobs.
+
+`cd tb/smoke && make` needs nothing but Verilator and answers one question:
+which of the five ways of producing background-only output is happening. It
+drives the core directly rather than through AXI4-Lite, so each scenario is
+three lines of configuration, and it is what the table in §13.3 is measured
+from. It is also where soft start is exercised, because `CTRL.SYNC_START` is
+deliberately *off* in the UVM bench — see §13.6 and the note on `start_mixer`.
+
+`cd tb && make regress` is the real bench. Nine tests; the ones that earn their
+place:
 
 | Test | Requirement |
 |---|---|
@@ -878,7 +911,7 @@ back afterwards.
 
 It is not free. The map carries eight layer blocks whatever the build
 instantiates, so a four-layer build pays for four sets of registers it never
-reads: 74 bits each, 296 flip-flops, about 0.3% of the block's flops (§13).
+reads: 74 bits each, 296 flip-flops, about 0.3% of the block's flops (§14).
 Writable, readable, connected to nothing. The alternative is a map per layer
 count, and with it a C header per layer count, a copy of the register
 documentation per layer count, and an elaboration-time check whose whole job is
@@ -1224,7 +1257,296 @@ error logic are all untouched. None of them looks inside a pixel, which is why
 
 ---
 
-## 13. Results
+## 13. Driving the output master
+
+Section 3 covers the output handshake. This one covers what the output master
+*does* — what makes `TVALID` go high, what the raster is doing when no layer is
+contributing, and how to find out why a layer you are driving is not appearing.
+
+If you are reading this because you fed a layer and got background, skip to
+§13.3; it is a decision procedure, not an explanation.
+
+### 13.1 The output free-runs. It is a timing generator
+
+The whole block hangs off two signals:
+
+```systemverilog
+assign s0_valid = ctrl_en && act_ok;                 // may the raster advance
+assign pipe_en  = m_axis_tready || !m_axis_tvalid;   // may the pipe shift
+```
+
+`act_ok` is "the active canvas is usable" — latched non-zero `WIDTH` and
+`HEIGHT`, beat-aligned. `ctrl_en` is `CTRL.EN`.
+
+**No input signal appears in either expression.** Not `s_axis_tvalid`, not
+`lay_armed`, not a FIFO level. That is not an oversight, it is R6: a video sink
+loses lock if the stream pauses, so a source that stops must not be able to take
+the display down with it. The consequence is the thing to internalise:
+
+> With `CTRL.EN` set and a legal canvas, the mixer emits a complete frame every
+> `WIDTH × HEIGHT / P_PPC` beats, forever, whether or not any layer has ever
+> delivered a single pixel.
+
+A layer that is not contributing is not special-cased anywhere. It arrives at
+the cascade with an effective alpha of zero, and Porter-Duff "over" with alpha
+zero returns the accumulator bit-exactly. With no layer contributing, the
+accumulator is still the background it was initialised with, and that is what
+comes out.
+
+So **background on the output is the designed, correct behaviour for "nothing is
+contributing"**. It is not an error path, which is exactly why it is silent, and
+why a healthy-looking output stream tells you nothing about whether your layers
+are working. The status registers are the only place that distinction exists.
+
+### 13.2 What drives each output signal
+
+| Output | Driven by | Meaning |
+|---|---|---|
+| `m_axis_tvalid` | `v_q[P_NUM_LAYERS]` | a flip-flop, never a function of `TREADY` (§3.4) |
+| `m_axis_tdata` | `{acc_q[P_NUM_LAYERS][j], LP_OPAQUE}` per lane | lane 0 in the LSBs |
+| `m_axis_tuser` | `sof_q[P_NUM_LAYERS]` | **SOF** — first beat of the frame only |
+| `m_axis_tlast` | `eol_q[P_NUM_LAYERS]` | **EOL** — last beat of *every line* |
+
+Three things catch people:
+
+**`TLAST` is end of line, not end of frame.** It asserts `HEIGHT` times per
+frame. There is no end-of-frame marker on the output at all; a sink that wants
+one derives it from `TUSER`. The layer inputs use the same convention, and
+disagreeing about it is the single most common wiring fault — see §13.3.
+
+**The output alpha is a constant.** When `P_OUT_HAS_ALPHA`, every pixel's alpha
+byte is `LP_OPAQUE` = `{P_CH_W{1'b1}}`, hardwired. Everything below the top
+layer has been composited in, so the result is opaque by construction; the field
+exists for byte-layout compatibility with the input, not to carry information.
+
+**Pixel layout is `{R, G, B, A}` with A in the least significant bits**, at every
+`P_CH_W`. So an RGBA8 pixel is `{R[31:24], G[23:16], B[15:8], A[7:0]}`. The
+package accessors are the normative statement:
+
+```systemverilog
+function automatic logic [CH_MAX_W-1:0] px_a(input int ch_w, input logic [PX_MAX_W-1:0] p);
+  return CH_MAX_W'(p & ch_mask(ch_w));      // alpha is the LSBs
+endfunction
+```
+
+Pack a source as `{A, B, G, R}` instead and `px_a` returns your red channel.
+With a dark red test pattern that is an alpha near zero, and the symptom is
+background with a faint ghost — see §13.5.
+
+Output latency is `P_NUM_LAYERS + 2` beats from the raster position to the pin:
+stage F, stage A, and one stage per layer.
+
+### 13.3 Why the layer you are driving is not coming out
+
+Five mechanisms produce "background only", and they are distinguishable from the
+registers alone. The table is measured, not reasoned: each row is a scenario in
+[`tb/smoke`](../tb/smoke), a run of
+`axis_video_mixer_core` on an 8×8 canvas, `P_PPC = 1`, `P_CH_W = 8`, one layer
+whose window is the whole canvas, ~3000 cycles with `m_axis_tready` tied high.
+"Non-bg beats" is how many output beats differed from the background colour.
+
+| What you see in the registers | Non-bg beats | Cause | Fix |
+|---|---|---|---|
+| `ERR.GEOM` set, `L<i>_STATUS.ARMED` stuck 0, `CFG_BAD` clear | 0 / 2997 | The source's `TLAST`/`TUSER` placement disagrees with `L<i>_SIZE`. Measured case: `TLAST` once per frame instead of once per line | Assert `TLAST` on the last beat of **every line**, `TUSER` on the first beat of the frame and nowhere else |
+| `ERR.CFG` set, `L<i>_STATUS.CFG_BAD` set, `ARMED` 0 | 0 / 2997 | The window is illegal, so the layer never enables. Measured cases: `L<i>_SIZE` still at its reset of 0, and `X + WIDTH > CANVAS.WIDTH` | Write `L<i>_SIZE` and keep the window inside the canvas; at `P_PPC > 1`, `X` and `WIDTH` must also be multiples of `CAPS.PPC` |
+| Everything clean. No `ERR` bit, `CFG_BAD` 0, `ARMED` 0, `FIFO_LEVEL` 0, and the input's `TREADY` sits **high** | 0 / 2997 | `L<i>_CTRL.EN` is 0. A disabled layer *drains* its input rather than backpressuring it (§3.1), so a happily-accepted stream is not evidence of anything | Set `L<i>_CTRL.EN` |
+| `ERR.STARVE` set, `L<i>_STATUS.DROPPED` set, `ARMED` flickering | 216 / 2997 | The source cannot sustain the raster rate at that window position. Measured case: three idle cycles per beat, window at the canvas origin | §13.4 — and this is what `CTRL.SYNC_START` is for |
+| **`ARMED` 1, `FIFO_LEVEL` healthy, no `ERR` bit at all** | 0 / 2997 | Effective alpha is zero. The layer is working perfectly and compositing nothing | §13.5 |
+| *(correct, for comparison)* | 2933 / 2997 | — | — |
+
+The last row but one is the one worth knowing about in advance, because every
+observable says the layer is fine. There is no error bit for it and there should
+not be — a fully transparent layer is a legitimate configuration.
+
+Two readings that are *not* diagnostic, and that mislead:
+
+- **The input's `TREADY` being high.** It means FIFO space, nothing more. A
+  disabled layer holds it high permanently while discarding every beat.
+- **`FRAME_COUNT` incrementing.** It proves the output pipeline runs. It says
+  nothing about layers, and it increments identically with no sources attached.
+
+### 13.4 The frames you always lose at the start
+
+Even with everything correct you lose the first frame. In the measured
+baseline, 64 of 2997 beats were background — exactly one 8×8 frame — before the
+layer appeared.
+
+That is §4's arming rule, not a fault. `lay_armed` goes high on the layer's
+first buffered beat, but `lay_active` is only sampled from it at a frame
+boundary:
+
+```systemverilog
+if (frame_latch) lay_active[i] <= lay_armed[i] && want_en[i] && !lay_flush[i];
+```
+
+A layer that joined mid-frame would have its pixel zero consumed part way along
+a line and would stay skewed by that offset for as long as it ran, because it
+then supplies exactly as many pixels per frame as the window consumes. The frame
+boundary is what guarantees the FIFO head is pixel zero when the window opens.
+
+The cost is that `armed` is a weak condition: it means *one beat* has arrived,
+not that a frame's worth has. A layer whose window touches the canvas origin
+needs its first pixel on the first beat of the frame and has no slack at all to
+fetch it. If the source is not already ahead, the layer starves on beat zero,
+gets dropped and flushed, re-arms at the next input SOF, and repeats — forever,
+at every frame, while every register except `ERR.STARVE` looks reasonable. That
+is the failure mode `CTRL.SYNC_START` exists to remove; see §13.6.
+
+### 13.5 The alpha trap
+
+`L<i>_CTRL.ALPHA_SRC` resets to `PIXEL_X_GLOBAL`: the pixel's own alpha channel
+is multiplied into the global `ALPHA`. `ALPHA` itself resets to `0xFF`, so the
+global is not the problem — the pixel's channel is.
+
+```systemverilog
+return (src_sel == ALPHA_GLOBAL_ONLY) ? global_a : mul_max(ch_w, pixel_a, global_a);
+```
+
+A test-pattern generator that produces RGB and leaves the fourth byte at zero
+therefore produces a perfectly transparent layer. The blend runs, the FIFO
+drains, `ARMED` stays 1, no error latches, and the output is the background to
+the bit — in the measured run, zero of 2997 beats differed from it, against
+2933 of 2997 for the same stimulus with the alpha byte set.
+
+Two fixes, and they are not equivalent:
+
+- **`L<i>_CTRL.ALPHA_SRC = GLOBAL_ONLY`** ignores the pixel's alpha entirely and
+  uses `ALPHA` alone. This is the right answer for any source that does not
+  deliberately produce an alpha channel, and it is what the field is for.
+- **Have the source emit full-scale alpha.** Note full scale is `P_CH_W` bits
+  wide, not 8: `0xFF` at `P_CH_W = 8` but `0x3FF` at 10 and `0xFFFF` at 16.
+  Writing `0xFF` into a 16-bit alpha channel is an alpha of 255/65535 — a layer
+  at 0.4% opacity, which looks exactly like a slightly wrong background. Read
+  `CAPS.CH_W` and shift.
+
+`BACKGROUND.RGB` and `L<i>_CTRL.ALPHA` stay 8 bits per component in every build
+and are expanded in hardware (§12.3); the *pixels* are the thing that arrives at
+full width, and they are where the mismatch bites.
+
+### 13.6 Soft start: `CTRL.SYNC_START`
+
+The gate that fixes §13.4. It resets to **1**, so it is the default behaviour.
+
+```systemverilog
+assign s0_valid    = ctrl_en && act_ok && !sync_wait;
+assign frame_latch = frame_boundary || !act_ok || !ctrl_en || sync_wait;
+```
+
+While `sync_wait` is high the raster does not advance and `TVALID` never
+asserts — verified: a build with one enabled layer and no source at all held
+`TVALID` low for 8000 cycles, not one beat. `STATUS.SYNC_WAIT` reads 1 so that
+state is visible from software, which matters more than it sounds: without it,
+"deliberately not started" and "running and emitting background" are
+indistinguishable from outside, and §13.3 shows how much time that costs.
+
+**R6 is not weakened.** R6 says a frame in flight never stalls on an input, and
+that is still true, because `sync_wait` is only ever raised from reset or at
+`frame_boundary`:
+
+```systemverilog
+end else if (frame_boundary && sync_hold && !sync_gave_up) begin
+  sync_wait <= 1'b1;
+end
+```
+
+Raising it mid-frame would stall the raster outright and break both R6 and the
+`a_output_continuous` liveness property. What *did* change is that property's
+guard — `fv_running` now excludes `sync_wait`. That is not a weakening either;
+it is the property keeping its original meaning. Leave the term out and it
+asserts that soft start does not exist.
+
+**The threshold is derived, not configured.** A layer is ready when it is armed
+and holds a full line of itself:
+
+```systemverilog
+assign need = (act_bw_l[gi] > LP_PREFILL_CAP) ? LP_PREFILL_CAP : act_bw_l[gi];
+assign lay_prefilled[gi] = lay_armed[gi] && (lay_level[gi] >= need);
+assign sync_hold = |(act_en & ~lay_prefilled);
+```
+
+One line is the sizing rule the buffer was built to (§5.6), so there is no
+register for software to get wrong. The cap matters: a window wider than the
+buffer could never buffer a line, and without the cap the gate would wait for a
+level that can never arrive and shut the output permanently.
+
+`act_en` is the frame-latched enable, which is why the opening test is qualified
+on `act_ok`. `act_en` and `act_ok` are written by the same `always_ff`, so
+before the first latch `act_en` is still zero, `sync_hold` is false, and without
+the `act_ok` term the gate would open in the one cycle before the configuration
+it is waiting on exists.
+
+**It is bounded, and it has to be.** An enabled layer whose source never comes
+up would otherwise black the display out for ever — a far worse failure in the
+field than the skewed picture the gate was protecting against. `SYNC_TIMEOUT`
+caps the wait in cycles and latches `ERR.SYNC_TO` when it fires.
+
+`SYNC_TIMEOUT` resets to **0, meaning wait indefinitely**, because that is the
+behaviour that makes a missing source obvious during bring-up: nothing comes
+out, `STATUS.SYNC_WAIT` is 1, and `STATUS.LAYER_ARMED` names the layer. **In a
+deployed design set it to a few frame times.** That is the one thing about this
+feature worth writing on a card.
+
+**`sync_gave_up` is not optional.** Once the timeout has fired, the gate must
+not re-shut at the next frame boundary, or a permanently dead source produces
+one frame per timeout — a stutter, which is worse than the smooth background it
+replaced. Measured before the flag existed: 8 frames in 4000 cycles. After:
+54 frames in the same 4000 cycles, smooth background, `ERR.SYNC_TO` latched.
+The flag clears on `!sync_hold`, i.e. on exactly the condition that would have
+opened the gate anyway, so a source that recovers gets the gate back without a
+soft reset.
+
+#### What it costs, measured
+
+All of these are scenarios in [`tb/smoke`](../tb/smoke) — `cd tb/smoke && make`
+re-measures them. 8×8 canvas, one layer whose window is the whole canvas,
+`P_PPC = 1`, `P_CH_W = 8`, source back-to-back at full rate:
+
+| | Background beats before the layer appears |
+|---|---|
+| `SYNC_START = 0` | 64 — one whole frame |
+| `SYNC_START = 1` | **0** |
+
+The lost startup frame of §13.4 disappears, because `frame_latch` is continuous
+while the gate is shut, so the layer goes active in the same cycle the gate
+opens rather than one frame later.
+
+#### The ways it must not deadlock
+
+A gate that shuts and never opens is a black screen, which is worse than any
+picture it could have prevented, so the cases where there is nothing legitimate
+to wait for are checked rather than reasoned about — scenarios 14 and 15 in
+`tb/smoke`:
+
+| | Behaviour |
+|---|---|
+| No layer enabled | `sync_hold` is an OR over an empty set, so the gate never shuts. Output runs at full rate, background. |
+| A layer enabled with an illegal window | `want_en` is false for it, so it never reaches `act_en` and cannot hold the gate. Output runs, `ERR.CFG` latches. One bad `SIZE` register does not black out the display. |
+| A window wider than the buffer | `LP_PREFILL_CAP` caps the demand at what the buffer can hold, so the gate asks for a level that is always reachable. |
+| A source that never comes up | `SYNC_TIMEOUT`, and `sync_gave_up` so it does not re-shut afterwards. |
+
+Both of the first two were measured, not assumed: 31 frames out in 2000 cycles
+in each case, `STATUS.SYNC_WAIT` low throughout.
+
+Two things it does **not** fix, and nothing can:
+
+- **A source that cannot sustain the rate.** Prefill buys a line of slack. A
+  source slower than the raster across the layer's window exhausts that and
+  starves exactly as before — `ERR.STARVE`, dropped for the frame, re-armed at
+  the next SOF. Prefill absorbs jitter; it does not create bandwidth.
+- **A window with no horizontal slack.** A window spanning the full canvas width
+  has to be fed at the output rate continuously, because its window never
+  closes within a line for the FIFO to refill in.
+
+#### Turning it off
+
+Clear `CTRL.SYNC_START` and the gate is never shut; `s0_valid` reduces to
+`ctrl_en && act_ok` and the block behaves exactly as it did before this existed.
+Worth doing if your sink cannot tolerate `TVALID` staying low at startup, or if
+you would rather have a degraded picture immediately than a correct one late.
+
+---
+
+## 14. Results
 
 Out-of-context, `xc7z045ffg900-2`, N = 4, `P_CH_W = 8`, constrained at
 **148.5 MHz** (`syn/syn.tcl`, 6.734 ns) — the 1080p60 pixel clock, so the

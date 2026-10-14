@@ -28,7 +28,7 @@
                 {
                     "name": "VER_MINOR",
                     "description": "Minor version. Increment on backwards-compatible additions.",
-                    "reset": 1,
+                    "reset": 2,
                     "width": 8,
                     "lsb": 0,
                     "access": "ro",
@@ -127,6 +127,16 @@
                     "enums": []
                 },
                 {
+                    "name": "SYNC_START",
+                    "description": "Hold the output off until every enabled layer has a full line of its own buffered, then start. Removes the case the drop rule handles badly: a window touching the canvas origin needs its first pixel on the first beat of a frame and has no slack to fetch it, so an only-just-fast-enough source starves on beat zero of every frame and never recovers. While waiting, STATUS.SYNC_WAIT reads 1 and LAYER_ARMED names who is holding things up. Bound the wait with SYNC_TIMEOUT. Clear this bit for the free-running behaviour: output begins as soon as EN and a legal canvas are set, whatever the layers are doing.",
+                    "reset": 1,
+                    "width": 1,
+                    "lsb": 1,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                },
+                {
                     "name": "SOFT_RST",
                     "description": "Write 1 to resynchronise the whole datapath: flush every layer FIFO, drop to the top of a new output frame, and re-arm each layer at its next input SOF. Self-clearing; does not touch configuration registers.",
                     "reset": 0,
@@ -208,6 +218,16 @@
                     "enums": []
                 },
                 {
+                    "name": "SYNC_WAIT",
+                    "description": "1 while the soft-start gate is holding the output off, waiting for an enabled layer to buffer a line. This is the register that distinguishes 'deliberately not started yet' from 'running and producing background', which are otherwise identical from outside. Always 0 when CTRL.SYNC_START is clear.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 2,
+                    "access": "ro",
+                    "hardware": "i",
+                    "enums": []
+                },
+                {
                     "name": "LAYER_ARMED",
                     "description": "One bit per layer: 1 once that layer has seen its input SOF and is delivering pixels. A layer that stays 0 is not receiving a stream.",
                     "reset": 0,
@@ -277,6 +297,16 @@
                     "reset": 0,
                     "width": 1,
                     "lsb": 3,
+                    "access": "rw1c",
+                    "hardware": "s",
+                    "enums": []
+                },
+                {
+                    "name": "SYNC_TO",
+                    "description": "The soft-start gate gave up: SYNC_TIMEOUT cycles elapsed with an enabled layer still short of a line, so the output was started anyway and that layer will be dropped until it catches up. Means a source did not come up, or cannot sustain the raster rate. Cannot latch while SYNC_TIMEOUT is 0, which waits indefinitely.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 5,
                     "access": "rw1c",
                     "hardware": "s",
                     "enums": []
@@ -434,6 +464,16 @@
                     "access": "rw",
                     "hardware": "o",
                     "enums": []
+                },
+                {
+                    "name": "SYNC_TO",
+                    "description": "Enable interrupt on ERR.SYNC_TO.",
+                    "reset": 0,
+                    "width": 1,
+                    "lsb": 5,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
                 }
             ]
         },
@@ -446,6 +486,23 @@
                     "name": "CYCLES",
                     "description": "0 disables the check.",
                     "reset": 65536,
+                    "width": 32,
+                    "lsb": 0,
+                    "access": "rw",
+                    "hardware": "o",
+                    "enums": []
+                }
+            ]
+        },
+        {
+            "name": "SYNC_TIMEOUT",
+            "description": "How long CTRL.SYNC_START will wait for an enabled layer to buffer a line before starting the output without it, in clock cycles. Reset is 0 -- wait indefinitely -- because that is the behaviour that makes a missing source obvious during bring-up: the output never starts, STATUS.SYNC_WAIT reads 1, and STATUS.LAYER_ARMED names the layer. In a deployed design set this to a few frame times instead, so one dead source degrades the picture rather than blacking it out; ERR.SYNC_TO then says it happened.",
+            "address": 48,
+            "bitfields": [
+                {
+                    "name": "CYCLES",
+                    "description": "0 waits indefinitely.",
+                    "reset": 0,
                     "width": 32,
                     "lsb": 0,
                     "access": "rw",

@@ -52,7 +52,7 @@ VER_MAJOR = 1
 # baked constants into hardware inputs. Every existing field keeps its address,
 # position and meaning, so it is a minor revision: software written against 1.0
 # still works, it just cannot see the new layers.
-VER_MINOR = 1
+VER_MINOR = 2
 MAGIC = 0x4D58  # ASCII 'MX'
 
 
@@ -147,6 +147,16 @@ def global_regs(num_layers):
                 bf("EN", "Enable the output stream. While 0 the mixer holds TVALID low and "
                    "accepts and discards nothing -- layer inputs are backpressured. Set the "
                    "canvas and layer geometry first, then set this.", 0, 1, "rw", "o", 0),
+                bf("SYNC_START", "Hold the output off until every enabled layer has a full "
+                   "line of its own buffered, then start. Removes the case the drop rule "
+                   "handles badly: a window touching the canvas origin needs its first pixel "
+                   "on the first beat of a frame and has no slack to fetch it, so an "
+                   "only-just-fast-enough source starves on beat zero of every frame and "
+                   "never recovers. While waiting, STATUS.SYNC_WAIT reads 1 and "
+                   "LAYER_ARMED names who is holding things up. Bound the wait with "
+                   "SYNC_TIMEOUT. Clear this bit for the free-running behaviour: output "
+                   "begins as soon as EN and a legal canvas are set, whatever the layers "
+                   "are doing.", 1, 1, "rw", "o", 1),
                 bf("SOFT_RST", "Write 1 to resynchronise the whole datapath: flush every layer "
                    "FIFO, drop to the top of a new output frame, and re-arm each layer at its "
                    "next input SOF. Self-clearing; does not touch configuration registers.",
@@ -183,6 +193,11 @@ def global_regs(num_layers):
                    "register instead of two.", 0, 1, "ro", "i"),
                 bf("FRAME_ACTIVE", "1 while the output is mid-frame (between SOF and the last "
                    "pixel of the last line).", 1, 1, "ro", "i"),
+                bf("SYNC_WAIT", "1 while the soft-start gate is holding the output off, "
+                   "waiting for an enabled layer to buffer a line. This is the register that "
+                   "distinguishes 'deliberately not started yet' from 'running and producing "
+                   "background', which are otherwise identical from outside. Always 0 when "
+                   "CTRL.SYNC_START is clear.", 2, 1, "ro", "i"),
                 bf("LAYER_ARMED", "One bit per layer: 1 once that layer has seen its input SOF "
                    "and is delivering pixels. A layer that stays 0 is not receiving a stream.",
                    16, max(num_layers, 1), "ro", "i"),
@@ -221,6 +236,11 @@ def global_regs(num_layers):
                    "consumes, which in practice means a frame rate mismatch. Harmless in "
                    "short bursts, which is why it is measured against a threshold rather than "
                    "flagged on the first stalled cycle.", 3, 1, "rw1c", "s"),
+                bf("SYNC_TO", "The soft-start gate gave up: SYNC_TIMEOUT cycles elapsed with "
+                   "an enabled layer still short of a line, so the output was started anyway "
+                   "and that layer will be dropped until it catches up. Means a source did "
+                   "not come up, or cannot sustain the raster rate. Cannot latch while "
+                   "SYNC_TIMEOUT is 0, which waits indefinitely.", 5, 1, "rw1c", "s"),
                 bf("OUT_STALL", "The downstream sink held TREADY low for longer than the stall "
                    "threshold while the mixer had a beat to give. Distinguishes 'the display "
                    "pipeline is blocked' from 'a source is starving', which look identical from "
@@ -252,6 +272,7 @@ def global_regs(num_layers):
                 bf("GEOM", "Enable interrupt on ERR.GEOM.", 2, 1, "rw", "o", 0),
                 bf("SRC_STALL", "Enable interrupt on ERR.SRC_STALL.", 3, 1, "rw", "o", 0),
                 bf("OUT_STALL", "Enable interrupt on ERR.OUT_STALL.", 4, 1, "rw", "o", 0),
+                bf("SYNC_TO", "Enable interrupt on ERR.SYNC_TO.", 5, 1, "rw", "o", 0),
             ],
         ),
         reg(
@@ -262,6 +283,18 @@ def global_regs(num_layers):
             "comfortably longer than any legitimate gap, comfortably shorter than a frame.",
             GLOBAL_BASE + 0x2C,
             [bf("CYCLES", "0 disables the check.", 0, 32, "rw", "o", 0x10000)],
+        ),
+        reg(
+            "SYNC_TIMEOUT",
+            "How long CTRL.SYNC_START will wait for an enabled layer to buffer a line before "
+            "starting the output without it, in clock cycles. Reset is 0 -- wait "
+            "indefinitely -- because that is the behaviour that makes a missing source "
+            "obvious during bring-up: the output never starts, STATUS.SYNC_WAIT reads 1, and "
+            "STATUS.LAYER_ARMED names the layer. In a deployed design set this to a few "
+            "frame times instead, so one dead source degrades the picture rather than "
+            "blacking it out; ERR.SYNC_TO then says it happened.",
+            GLOBAL_BASE + 0x30,
+            [bf("CYCLES", "0 waits indefinitely.", 0, 32, "rw", "o", 0)],
         ),
     ]
 
@@ -412,15 +445,18 @@ module axis_video_mixer_csr #(
     ////////////////////////////////////////////////////////////////////////////////////////////////
     output logic        ctrl_en,
     output logic        ctrl_soft_rst,
+    output logic        ctrl_sync_start,
     output logic [15:0] canvas_width,
     output logic [15:0] canvas_height,
     output logic [23:0] background_rgb,
     output logic [31:0] stall_limit,
+    output logic [31:0] sync_timeout,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Global status back from the datapath
     ////////////////////////////////////////////////////////////////////////////////////////////////
     input logic        status_frame_active,
+    input logic        status_sync_wait,
     input logic [31:0] frame_count,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -431,6 +467,7 @@ module axis_video_mixer_csr #(
     input  logic                    err_geom_set,
     input  logic                    err_src_stall_set,
     input  logic                    err_out_stall_set,
+    input  logic                    err_sync_to_set,
     input  logic [P_NUM_LAYERS-1:0] err_layer_set,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -539,13 +576,14 @@ module axis_video_mixer_csr #(
   // the AXI read path -- so this mirrors them. corsair's copy stays the
   // authoritative one that software reads and clears; this exists purely to
   // drive the two derived signals.
-  logic [4:0] err_ff;
-  logic [4:0] irq_en;
-  logic [4:0] err_set;
+  logic [5:0] err_ff;
+  logic [5:0] irq_en;
+  logic [5:0] err_set;
   logic       err_wr_clear;
 
   assign err_set = {
-    err_out_stall_set, err_src_stall_set, err_geom_set, err_starve_set, err_cfg_set
+    err_sync_to_set, err_out_stall_set, err_src_stall_set, err_geom_set, err_starve_set,
+    err_cfg_set
   };
 
   // The write address has to be captured on the AW handshake rather than read
@@ -580,9 +618,9 @@ module axis_video_mixer_csr #(
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
-      err_ff <= 5'b0;
+      err_ff <= 6'b0;
     end else begin
-      for (int b = 0; b < 5; b++) begin
+      for (int b = 0; b < 6; b++) begin
         // Set beats clear, matching the register block's own priority: an error
         // that arrives in the same cycle as its acknowledgement is not lost.
         if (err_set[b]) err_ff[b] <= 1'b1;
@@ -623,12 +661,15 @@ def emit_csr_wrapper(num_layers, path):
         ("csr_caps_ppc_in", "caps_ppc"),
         ("csr_ctrl_en_out", "ctrl_en"),
         ("csr_ctrl_soft_rst_out", "ctrl_soft_rst"),
+        ("csr_ctrl_sync_start_out", "ctrl_sync_start"),
         ("csr_canvas_width_out", "canvas_width"),
         ("csr_canvas_height_out", "canvas_height"),
         ("csr_background_rgb_out", "background_rgb"),
         ("csr_stall_limit_cycles_out", "stall_limit"),
+        ("csr_sync_timeout_cycles_out", "sync_timeout"),
         ("csr_status_err_any_in", "(|err_ff)"),
         ("csr_status_frame_active_in", "status_frame_active"),
+        ("csr_status_sync_wait_in", "status_sync_wait"),
         ("csr_status_layer_armed_in", "map_armed"),
         ("csr_frame_count_count_in", "frame_count"),
         ("csr_err_cfg_set", "err_cfg_set"),
@@ -636,11 +677,13 @@ def emit_csr_wrapper(num_layers, path):
         ("csr_err_geom_set", "err_geom_set"),
         ("csr_err_src_stall_set", "err_src_stall_set"),
         ("csr_err_out_stall_set", "err_out_stall_set"),
+        ("csr_err_sync_to_set", "err_sync_to_set"),
         ("csr_irq_en_cfg_out", "irq_en[0]"),
         ("csr_irq_en_starve_out", "irq_en[1]"),
         ("csr_irq_en_geom_out", "irq_en[2]"),
         ("csr_irq_en_src_stall_out", "irq_en[3]"),
         ("csr_irq_en_out_stall_out", "irq_en[4]"),
+        ("csr_irq_en_sync_to_out", "irq_en[5]"),
     ]
     for i in range(num_layers):
         conns.append(("csr_err_layer_l%d_set" % i, "map_err_layer_set[%d]" % i))

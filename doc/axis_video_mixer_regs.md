@@ -34,6 +34,7 @@ Base address: 0x00000000
 | [ERR_LAYER](#err_layer)  | 0x024      | One latched bit per layer, set alongside the per-layer causes in ERR. Names which input is at fault without having to read every layer's status register. Write 1 to a bit to clear that layer alone. |
 | [IRQ_EN](#irq_en)        | 0x028      | Interrupt enable, one bit per ERR bit and in the same order. The irq output is the OR of (ERR & IRQ_EN), so it stays asserted until software clears the ERR bit. |
 | [STALL_LIMIT](#stall_limit) | 0x02c      | How long a stream may stay stalled before ERR.OUT_STALL or ERR.SRC_STALL latches, in clock cycles. Applies to both directions: the downstream sink holding TREADY low, and a layer source held backpressured on a full FIFO. Reset is 0x10000 -- comfortably longer than any legitimate gap, comfortably shorter than a frame. |
+| [SYNC_TIMEOUT](#sync_timeout) | 0x030      | How long CTRL.SYNC_START will wait for an enabled layer to buffer a line before starting the output without it, in clock cycles. Reset is 0 -- wait indefinitely -- because that is the behaviour that makes a missing source obvious during bring-up: the output never starts, STATUS.SYNC_WAIT reads 1, and STATUS.LAYER_ARMED names the layer. In a deployed design set this to a few frame times instead, so one dead source degrades the picture rather than blacking it out; ERR.SYNC_TO then says it happened. |
 | [L0_CTRL](#l0_ctrl)      | 0x040      | Layer 0 enable and alpha. Takes effect at the next output frame boundary. |
 | [L0_POS](#l0_pos)        | 0x044      | Layer 0 top-left corner, in canvas pixels. Takes effect at the next output frame boundary, so a moving window never tears. |
 | [L0_SIZE](#l0_size)      | 0x048      | Layer 0 size, in pixels. The mixer does not scale: this must match the geometry the input stream actually delivers, or ERR.GEOM latches and the layer is dropped. |
@@ -73,14 +74,14 @@ Identification and version. Read-only constants, so a correct read here proves t
 
 Address offset: 0x000
 
-Reset value: 0x4d580101
+Reset value: 0x4d580102
 
 
 | Name             | Bits   | Mode            | Reset      | Description |
 | :---             | :---   | :---            | :---       | :---        |
 | MAGIC            | 31:16  | ro              | 0x4d58     | Always 0x4D58 (ASCII 'MX'). A read of 0x0000 or 0xFFFF means the bus is not reaching the mixer. |
 | VER_MAJOR        | 15:8   | ro              | 0x01       | Major version. Increment on any incompatible map change. |
-| VER_MINOR        | 7:0    | ro              | 0x01       | Minor version. Increment on backwards-compatible additions. |
+| VER_MINOR        | 7:0    | ro              | 0x02       | Minor version. Increment on backwards-compatible additions. |
 
 Back to [Register map](#register-map-summary).
 
@@ -124,14 +125,15 @@ Global mixer control.
 
 Address offset: 0x00c
 
-Reset value: 0x00000000
+Reset value: 0x00000002
 
 
 | Name             | Bits   | Mode            | Reset      | Description |
 | :---             | :---   | :---            | :---       | :---        |
 | -                | 31:9   | -               | 0x00000    | Reserved |
 | SOFT_RST         | 8      | wosc            | 0x0        | Write 1 to resynchronise the whole datapath: flush every layer FIFO, drop to the top of a new output frame, and re-arm each layer at its next input SOF. Self-clearing; does not touch configuration registers. |
-| -                | 7:1    | -               | 0x0        | Reserved |
+| -                | 7:2    | -               | 0x0        | Reserved |
+| SYNC_START       | 1      | rw              | 0x1        | Hold the output off until every enabled layer has a full line of its own buffered, then start. Removes the case the drop rule handles badly: a window touching the canvas origin needs its first pixel on the first beat of a frame and has no slack to fetch it, so an only-just-fast-enough source starves on beat zero of every frame and never recovers. While waiting, STATUS.SYNC_WAIT reads 1 and LAYER_ARMED names who is holding things up. Bound the wait with SYNC_TIMEOUT. Clear this bit for the free-running behaviour: output begins as soon as EN and a legal canvas are set, whatever the layers are doing. |
 | EN               | 0      | rw              | 0x0        | Enable the output stream. While 0 the mixer holds TVALID low and accepts and discards nothing -- layer inputs are backpressured. Set the canvas and layer geometry first, then set this. |
 
 Back to [Register map](#register-map-summary).
@@ -181,7 +183,8 @@ Reset value: 0x00000000
 | :---             | :---   | :---            | :---       | :---        |
 | -                | 31:24  | -               | 0x00       | Reserved |
 | LAYER_ARMED      | 23:16  | ro              | 0x00       | One bit per layer: 1 once that layer has seen its input SOF and is delivering pixels. A layer that stays 0 is not receiving a stream. |
-| -                | 15:2   | -               | 0x000      | Reserved |
+| -                | 15:3   | -               | 0x000      | Reserved |
+| SYNC_WAIT        | 2      | ro              | 0x0        | 1 while the soft-start gate is holding the output off, waiting for an enabled layer to buffer a line. This is the register that distinguishes 'deliberately not started yet' from 'running and producing background', which are otherwise identical from outside. Always 0 when CTRL.SYNC_START is clear. |
 | FRAME_ACTIVE     | 1      | ro              | 0x0        | 1 while the output is mid-frame (between SOF and the last pixel of the last line). |
 | ERR_ANY          | 0      | ro              | 0x0        | 1 while any bit in ERR is set. Lets a polling loop check one register instead of two. |
 
@@ -213,7 +216,8 @@ Reset value: 0x00000000
 
 | Name             | Bits   | Mode            | Reset      | Description |
 | :---             | :---   | :---            | :---       | :---        |
-| -                | 31:5   | -               | 0x000000   | Reserved |
+| -                | 31:6   | -               | 0x000000   | Reserved |
+| SYNC_TO          | 5      | rw1c            | 0x0        | The soft-start gate gave up: SYNC_TIMEOUT cycles elapsed with an enabled layer still short of a line, so the output was started anyway and that layer will be dropped until it catches up. Means a source did not come up, or cannot sustain the raster rate. Cannot latch while SYNC_TIMEOUT is 0, which waits indefinitely. |
 | OUT_STALL        | 4      | rw1c            | 0x0        | The downstream sink held TREADY low for longer than the stall threshold while the mixer had a beat to give. Distinguishes 'the display pipeline is blocked' from 'a source is starving', which look identical from a stuck FRAME_COUNT alone. |
 | SRC_STALL        | 3      | rw1c            | 0x0        | A layer input was held backpressured -- TVALID high, TREADY low because its FIFO was full -- for longer than STALL_LIMIT cycles. The mirror image of OUT_STALL: that source is producing faster than the mixer consumes, which in practice means a frame rate mismatch. Harmless in short bursts, which is why it is measured against a threshold rather than flagged on the first stalled cycle. |
 | GEOM             | 2      | rw1c            | 0x0        | A layer's stream geometry disagreed with its SIZE register -- TLAST arrived somewhere other than the configured last pixel of a line, or TUSER somewhere other than the first pixel of a frame. That layer resynchronises at its next input SOF. |
@@ -256,7 +260,8 @@ Reset value: 0x00000000
 
 | Name             | Bits   | Mode            | Reset      | Description |
 | :---             | :---   | :---            | :---       | :---        |
-| -                | 31:5   | -               | 0x000000   | Reserved |
+| -                | 31:6   | -               | 0x000000   | Reserved |
+| SYNC_TO          | 5      | rw              | 0x0        | Enable interrupt on ERR.SYNC_TO. |
 | OUT_STALL        | 4      | rw              | 0x0        | Enable interrupt on ERR.OUT_STALL. |
 | SRC_STALL        | 3      | rw              | 0x0        | Enable interrupt on ERR.SRC_STALL. |
 | GEOM             | 2      | rw              | 0x0        | Enable interrupt on ERR.GEOM. |
@@ -277,6 +282,21 @@ Reset value: 0x00010000
 | Name             | Bits   | Mode            | Reset      | Description |
 | :---             | :---   | :---            | :---       | :---        |
 | CYCLES           | 31:0   | rw              | 0x00010000 | 0 disables the check. |
+
+Back to [Register map](#register-map-summary).
+
+## SYNC_TIMEOUT
+
+How long CTRL.SYNC_START will wait for an enabled layer to buffer a line before starting the output without it, in clock cycles. Reset is 0 -- wait indefinitely -- because that is the behaviour that makes a missing source obvious during bring-up: the output never starts, STATUS.SYNC_WAIT reads 1, and STATUS.LAYER_ARMED names the layer. In a deployed design set this to a few frame times instead, so one dead source degrades the picture rather than blacking it out; ERR.SYNC_TO then says it happened.
+
+Address offset: 0x030
+
+Reset value: 0x00000000
+
+
+| Name             | Bits   | Mode            | Reset      | Description |
+| :---             | :---   | :---            | :---       | :---        |
+| CYCLES           | 31:0   | rw              | 0x00000000 | 0 waits indefinitely. |
 
 Back to [Register map](#register-map-summary).
 

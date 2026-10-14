@@ -93,6 +93,7 @@ package mixer_tb_pkg;
   parameter int unsigned REG_ERR_LAYER   = 'h24;
   parameter int unsigned REG_IRQ_EN      = 'h28;
   parameter int unsigned REG_STALL_LIMIT = 'h2C;
+  parameter int unsigned REG_SYNC_TIMEOUT = 'h30;
 
   parameter int unsigned REG_LAYER_BASE   = 'h40;
   parameter int unsigned REG_LAYER_STRIDE = 'h10;

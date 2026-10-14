@@ -111,6 +111,8 @@ module fv_core
     // Free software.
     input logic                    ctrl_en_i,
     input logic                    ctrl_soft_rst,
+    input logic                    ctrl_sync_start,
+    input logic [            31:0] sync_timeout,
     input logic [            15:0] canvas_width_i,
     input logic [            15:0] canvas_height_i,
     input logic [            23:0] background_rgb_i,
@@ -228,9 +230,10 @@ module fv_core
   // DUT
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   logic                    status_frame_active;
+  logic                    status_sync_wait;
   logic [            31:0] frame_count;
   logic                    err_cfg_set, err_starve_set, err_geom_set;
-  logic                    err_src_stall_set, err_out_stall_set;
+  logic                    err_src_stall_set, err_out_stall_set, err_sync_to_set;
   logic [P_NUM_LAYERS-1:0] err_layer_set;
   logic [P_NUM_LAYERS-1:0] lay_armed, lay_dropped, lay_cfg_bad;
   logic [            15:0] lay_level                       [P_NUM_LAYERS];
@@ -248,9 +251,11 @@ module fv_core
       .clk  (clk),
       .rst_n(rst_n),
 
-      .ctrl_en       (ctrl_en),
-      .ctrl_soft_rst (ctrl_soft_rst),
-      .canvas_width  (canvas_width),
+      .ctrl_en        (ctrl_en),
+      .ctrl_soft_rst  (ctrl_soft_rst),
+      .ctrl_sync_start(ctrl_sync_start),
+      .sync_timeout   (sync_timeout),
+      .canvas_width   (canvas_width),
       .canvas_height (canvas_height),
       .background_rgb(background_rgb),
       .stall_limit   (stall_limit),
@@ -263,12 +268,14 @@ module fv_core
       .lay_h         (lay_h),
 
       .status_frame_active(status_frame_active),
+      .status_sync_wait   (status_sync_wait),
       .frame_count        (frame_count),
       .err_cfg_set        (err_cfg_set),
       .err_starve_set     (err_starve_set),
       .err_geom_set       (err_geom_set),
       .err_src_stall_set  (err_src_stall_set),
       .err_out_stall_set  (err_out_stall_set),
+      .err_sync_to_set    (err_sync_to_set),
       .err_layer_set      (err_layer_set),
       .lay_armed          (lay_armed),
       .lay_dropped        (lay_dropped),
@@ -366,7 +373,13 @@ module fv_core
   logic [7:0] fv_run_cycles;
   logic       fv_running;
 
-  assign fv_running = rst_n && !ctrl_soft_rst && ctrl_en && dut.act_ok && m_axis_tready;
+  // !dut.sync_wait is not a weakening of the property, it is the property
+  // keeping its meaning. "The output never stalls on an input" has always been
+  // a statement about a frame in flight; soft start is a statement about when a
+  // frame may begin. Leave the term out and this asserts that soft start does
+  // not exist.
+  assign fv_running = rst_n && !ctrl_soft_rst && ctrl_en && dut.act_ok && m_axis_tready &&
+                      !dut.sync_wait;
 
   always_ff @(posedge clk) begin
     if (!rst_n || !fv_running) begin

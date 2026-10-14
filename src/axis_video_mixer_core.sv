@@ -26,6 +26,13 @@
 //           downstream loses lock if the stream pauses, so a starving source
 //           must not be allowed to take the display down with it.
 //
+//           That is a statement about a frame in flight, not about when a frame
+//           may start. CTRL.SYNC_START holds the raster at the top of a frame
+//           until every enabled layer has a line buffered, which removes the
+//           one case the drop rule handles badly: a window at the canvas origin
+//           has no slack to fetch its first pixel, so it starves on beat zero
+//           of every frame and never recovers. See "Soft start" below.
+//
 //           MULTI-PIXEL PER CLOCK. A beat carries P_PPC pixels, lane 0 in the
 //           least significant bits. The raster counts BEATS across the canvas,
 //           not pixels, and every layer's window is compared in beat units.
@@ -90,6 +97,10 @@ module axis_video_mixer_core
     ////////////////////////////////////////////////////////////////////////////////////////////////
     input logic                    ctrl_en,
     input logic                    ctrl_soft_rst,
+    // Hold the output off until every enabled layer has a line buffered. See
+    // "Soft start" below.
+    input logic                    ctrl_sync_start,
+    input logic [            31:0] sync_timeout,
     input logic [            15:0] canvas_width,
     input logic [            15:0] canvas_height,
     input logic [            23:0] background_rgb,
@@ -106,8 +117,10 @@ module axis_video_mixer_core
     // Status and error strobes back to the register block
     ////////////////////////////////////////////////////////////////////////////////////////////////
     output logic                    status_frame_active,
+    output logic                    status_sync_wait,
     output logic [            31:0] frame_count,
     output logic                    err_cfg_set,
+    output logic                    err_sync_to_set,
     output logic                    err_starve_set,
     output logic                    err_geom_set,
     output logic                    err_src_stall_set,
@@ -227,7 +240,11 @@ module axis_video_mixer_core
 
   assign soft_rst = ctrl_soft_rst;
 
-  assign s0_valid = ctrl_en && act_ok;
+  // sync_wait is the soft-start gate. It is declared with the rest of the
+  // soft-start logic below; only its effect belongs here.
+  logic sync_wait;
+
+  assign s0_valid = ctrl_en && act_ok && !sync_wait;
   assign s0_sof   = (out_bx == 16'd0) && (out_y == 16'd0);
   assign s0_eol   = (out_bx == act_bw - 16'd1);
   assign s0_eof   = s0_eol && (out_y == act_h - 16'd1);
@@ -241,8 +258,13 @@ module axis_video_mixer_core
   // A disabled mixer does not advance its raster, so it never reaches a frame
   // boundary; without this, a canvas written before EN was set could never
   // take effect, and the block would silently keep drawing at its reset size.
+  // sync_wait joins !ctrl_en and !act_ok for the same reason they are there:
+  // while the gate is shut there is no frame in flight to tear, so holding
+  // configuration back would be worse than useless. It is also load bearing --
+  // a layer has to be able to go active while the gate is shut, and only a
+  // latch does that.
   assign frame_boundary = soft_rst || (pipe_en && s0_valid && s0_eof);
-  assign frame_latch    = frame_boundary || !act_ok || !ctrl_en;
+  assign frame_latch    = frame_boundary || !act_ok || !ctrl_en || sync_wait;
 
   always_ff @(posedge clk) begin
     if (!rst_n || soft_rst || !ctrl_en) begin
@@ -438,6 +460,130 @@ module axis_video_mixer_core
       if (frame_latch) lay_dropped <= '0;
     end
   end
+
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Soft start
+  //
+  // R6 says the output must never stall on an input, and it still does not: a
+  // frame that has begun always completes at full rate whatever the sources do.
+  // But R6 says nothing about when a frame may BEGIN, and that is the gap this
+  // fills.
+  //
+  // Without it, "armed" is the only thing standing between a layer and the
+  // composite, and armed means one beat has arrived -- not a frame's worth, not
+  // a line's worth. A layer whose window touches the canvas origin needs its
+  // first pixel on the first beat of the frame and has no slack whatever to go
+  // and get it. If the source is not already ahead of the raster the layer
+  // starves on beat zero, is dropped and flushed, re-arms at its next input
+  // SOF, and does the same thing again on the next frame -- for ever, while
+  // every register except ERR.STARVE looks healthy. See doc/design.md 13.4.
+  //
+  // So the gate holds the raster at the top of a frame until every enabled
+  // layer has a full line buffered. Three things make that safe:
+  //
+  //   It gates only at a frame boundary. Re-closing mid-frame would stall the
+  //   raster and break R6 outright, so sync_wait is only ever raised from
+  //   reset or at frame_boundary.
+  //
+  //   The threshold is derived, not configured. One line of that layer is the
+  //   sizing rule the FIFO was built to (5.6), so software cannot get it
+  //   wrong, and it is capped at the buffer's capacity so an over-wide window
+  //   cannot ask for more than could ever arrive and wedge the gate shut.
+  //
+  //   It is bounded. An enabled layer whose source never comes up would
+  //   otherwise black the display out for ever, which is a far worse failure
+  //   in the field than the skewed picture it was protecting against.
+  //   SYNC_TIMEOUT caps the wait and latches ERR.SYNC_TO when it fires, so the
+  //   degraded case is reached loudly rather than silently.
+  //
+  // CTRL.SYNC_START turns the whole thing off, which is the pre-soft-start
+  // behaviour exactly: the gate is then never shut and s0_valid reduces to
+  // ctrl_en && act_ok.
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  // The buffer holds P_FIFO_DEPTH beats, and level counts the prefetch register
+  // on top of that, so a demand of P_FIFO_DEPTH is always reachable.
+  localparam logic [15:0] LP_PREFILL_CAP = 16'(P_FIFO_DEPTH);
+
+  logic [P_NUM_LAYERS-1:0] lay_prefilled;
+  logic                    sync_hold;  // some enabled layer is still short of a line
+  logic [            31:0] sync_cnt;
+  logic                    sync_expired;
+  // Sticky from the moment the timeout fires until every enabled layer is
+  // genuinely prefilled again. Without it the gate re-shuts at the next frame
+  // boundary, waits out the timeout again, and emits one frame per timeout --
+  // so a source that never comes up turns a smooth background into a stutter,
+  // which is worse than the thing being protected against. Measured at 8
+  // frames in 4000 cycles before this existed.
+  logic                    sync_gave_up;
+
+  for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_prefill
+    logic [15:0] need;
+    // act_bw_l is this layer's width in BEATS, which is what level counts.
+    assign need = (act_bw_l[gi] > LP_PREFILL_CAP) ? LP_PREFILL_CAP : act_bw_l[gi];
+    assign lay_prefilled[gi] = lay_armed[gi] && (lay_level[gi] >= need);
+  end
+
+  assign sync_hold = |(act_en & ~lay_prefilled);
+
+  // Zero means wait indefinitely. The count only runs while the gate is
+  // actually holding something up, so a disabled mixer does not burn its
+  // patience before the sources have had a chance to start.
+  assign sync_expired = (sync_timeout != 32'd0) && (sync_cnt >= sync_timeout - 32'd1);
+
+  always_ff @(posedge clk) begin
+    if (!rst_n || soft_rst) begin
+      sync_cnt <= 32'd0;
+    end else if (sync_wait && ctrl_en && act_ok && (sync_timeout != 32'd0)) begin
+      // The sync_timeout term only stops a counter nobody is reading from
+      // free-running and wrapping while the wait is indefinite. It changes no
+      // behaviour: sync_expired is false at a timeout of zero either way.
+      if (!sync_expired) sync_cnt <= sync_cnt + 32'd1;
+    end else begin
+      sync_cnt <= 32'd0;
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (!rst_n || soft_rst) begin
+      // Shut from reset, so the very first frame is already synchronised rather
+      // than being the one frame nothing protects.
+      sync_wait       <= 1'b1;
+      err_sync_to_set <= 1'b0;
+    end else begin
+      err_sync_to_set <= 1'b0;
+      if (!ctrl_sync_start) begin
+        sync_wait <= 1'b0;
+      end else if (sync_wait) begin
+        // act_ok qualifies the opening because act_en is latched by the same
+        // always_ff that sets act_ok. Before that first latch act_en is still
+        // zero, sync_hold is therefore false, and without this term the gate
+        // would open in the one cycle before the configuration it is supposed
+        // to be waiting on even exists.
+        if (act_ok && ctrl_en && (!sync_hold || sync_expired)) begin
+          sync_wait       <= 1'b0;
+          err_sync_to_set <= sync_hold && sync_expired;
+        end
+      end else if (frame_boundary && sync_hold && !sync_gave_up) begin
+        sync_wait <= 1'b1;
+      end
+    end
+  end
+
+  // Clearing on !sync_hold rather than on armed is deliberate: the condition to
+  // leave the given-up state is the same one that would have opened the gate in
+  // the first place, so a source that recovers gets the gate back without
+  // needing a soft reset.
+  always_ff @(posedge clk) begin
+    if (!rst_n || soft_rst || !ctrl_en) begin
+      sync_gave_up <= 1'b0;
+    end else if (sync_wait && act_ok && ctrl_en && sync_hold && sync_expired) begin
+      sync_gave_up <= 1'b1;
+    end else if (!sync_hold) begin
+      sync_gave_up <= 1'b0;
+    end
+  end
+
+  assign status_sync_wait = sync_wait;
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Blend cascade

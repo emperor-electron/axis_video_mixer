@@ -10,8 +10,16 @@
 //           the same wires either way.
 ///////////////////////////////////////////////////////////////////
 
+//           P_NUM_ERR is taken from the width of the adapter's own mirror
+//           rather than written down here. It was a literal 5 until ERR.SYNC_TO
+//           made it 6, and the failure that caused is worth not repeating: the
+//           property truncated err_ff to five bits, so an interrupt raised by
+//           the sixth was a real BMC counterexample against correct RTL. A
+//           property that hard-codes the width of a thing it is checking goes
+//           stale silently the next time that thing grows.
 bind axis_video_mixer_csr fv_axil_props #(
-    .P_ADDR_W(P_ADDR_W)
+    .P_ADDR_W (P_ADDR_W),
+    .P_NUM_ERR($bits(err_ff))
 ) u_fv_axil (
     .clk  (clk),
     .rst_n(rst_n),

@@ -29,6 +29,7 @@ bind axis_video_mixer_core fv_core_props #(
     .pipe_en       (pipe_en),
     .frame_boundary(frame_boundary),
     .frame_latch   (frame_latch),
+    .sync_wait     (sync_wait),
 
     .act_ok  (act_ok),
     .act_w   (act_w),

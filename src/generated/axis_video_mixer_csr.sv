@@ -66,15 +66,18 @@ module axis_video_mixer_csr #(
     ////////////////////////////////////////////////////////////////////////////////////////////////
     output logic        ctrl_en,
     output logic        ctrl_soft_rst,
+    output logic        ctrl_sync_start,
     output logic [15:0] canvas_width,
     output logic [15:0] canvas_height,
     output logic [23:0] background_rgb,
     output logic [31:0] stall_limit,
+    output logic [31:0] sync_timeout,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Global status back from the datapath
     ////////////////////////////////////////////////////////////////////////////////////////////////
     input logic        status_frame_active,
+    input logic        status_sync_wait,
     input logic [31:0] frame_count,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -85,6 +88,7 @@ module axis_video_mixer_csr #(
     input  logic                    err_geom_set,
     input  logic                    err_src_stall_set,
     input  logic                    err_out_stall_set,
+    input  logic                    err_sync_to_set,
     input  logic [P_NUM_LAYERS-1:0] err_layer_set,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -193,13 +197,14 @@ module axis_video_mixer_csr #(
   // the AXI read path -- so this mirrors them. corsair's copy stays the
   // authoritative one that software reads and clears; this exists purely to
   // drive the two derived signals.
-  logic [4:0] err_ff;
-  logic [4:0] irq_en;
-  logic [4:0] err_set;
+  logic [5:0] err_ff;
+  logic [5:0] irq_en;
+  logic [5:0] err_set;
   logic       err_wr_clear;
 
   assign err_set = {
-    err_out_stall_set, err_src_stall_set, err_geom_set, err_starve_set, err_cfg_set
+    err_sync_to_set, err_out_stall_set, err_src_stall_set, err_geom_set, err_starve_set,
+    err_cfg_set
   };
 
   // The write address has to be captured on the AW handshake rather than read
@@ -234,9 +239,9 @@ module axis_video_mixer_csr #(
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
-      err_ff <= 5'b0;
+      err_ff <= 6'b0;
     end else begin
-      for (int b = 0; b < 5; b++) begin
+      for (int b = 0; b < 6; b++) begin
         // Set beats clear, matching the register block's own priority: an error
         // that arrives in the same cycle as its acknowledgement is not lost.
         if (err_set[b]) err_ff[b] <= 1'b1;
@@ -264,12 +269,15 @@ module axis_video_mixer_csr #(
       .csr_caps_ppc_in             (caps_ppc),
       .csr_ctrl_en_out             (ctrl_en),
       .csr_ctrl_soft_rst_out       (ctrl_soft_rst),
+      .csr_ctrl_sync_start_out     (ctrl_sync_start),
       .csr_canvas_width_out        (canvas_width),
       .csr_canvas_height_out       (canvas_height),
       .csr_background_rgb_out      (background_rgb),
       .csr_stall_limit_cycles_out  (stall_limit),
+      .csr_sync_timeout_cycles_out (sync_timeout),
       .csr_status_err_any_in       ((|err_ff)),
       .csr_status_frame_active_in  (status_frame_active),
+      .csr_status_sync_wait_in     (status_sync_wait),
       .csr_status_layer_armed_in   (map_armed),
       .csr_frame_count_count_in    (frame_count),
       .csr_err_cfg_set             (err_cfg_set),
@@ -277,11 +285,13 @@ module axis_video_mixer_csr #(
       .csr_err_geom_set            (err_geom_set),
       .csr_err_src_stall_set       (err_src_stall_set),
       .csr_err_out_stall_set       (err_out_stall_set),
+      .csr_err_sync_to_set         (err_sync_to_set),
       .csr_irq_en_cfg_out          (irq_en[0]),
       .csr_irq_en_starve_out       (irq_en[1]),
       .csr_irq_en_geom_out         (irq_en[2]),
       .csr_irq_en_src_stall_out    (irq_en[3]),
       .csr_irq_en_out_stall_out    (irq_en[4]),
+      .csr_irq_en_sync_to_out      (irq_en[5]),
       .csr_err_layer_l0_set        (map_err_layer_set[0]),
       .csr_err_layer_l1_set        (map_err_layer_set[1]),
       .csr_err_layer_l2_set        (map_err_layer_set[2]),

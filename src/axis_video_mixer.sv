@@ -212,15 +212,19 @@ module axis_video_mixer
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   logic        ctrl_en;
   logic        ctrl_soft_rst;
+  logic        ctrl_sync_start;
   logic [15:0] canvas_width;
   logic [15:0] canvas_height;
   logic [23:0] background_rgb;
   logic [31:0] stall_limit;
+  logic [31:0] sync_timeout;
 
   logic        status_frame_active;
+  logic        status_sync_wait;
   logic [31:0] frame_count;
 
   logic err_cfg_set, err_starve_set, err_geom_set, err_src_stall_set, err_out_stall_set;
+  logic err_sync_to_set;
   logic [P_NUM_LAYERS-1:0] err_layer_set;
 
   logic [P_NUM_LAYERS-1:0] lay_en;
@@ -377,14 +381,17 @@ module axis_video_mixer
       .axil_rvalid (s_axil_rvalid),
       .axil_rready (s_axil_rready),
 
-      .ctrl_en       (ctrl_en),
-      .ctrl_soft_rst (ctrl_soft_rst),
-      .canvas_width  (canvas_width),
-      .canvas_height (canvas_height),
-      .background_rgb(background_rgb),
-      .stall_limit   (stall_limit),
+      .ctrl_en        (ctrl_en),
+      .ctrl_soft_rst  (ctrl_soft_rst),
+      .ctrl_sync_start(ctrl_sync_start),
+      .canvas_width   (canvas_width),
+      .canvas_height  (canvas_height),
+      .background_rgb (background_rgb),
+      .stall_limit    (stall_limit),
+      .sync_timeout   (sync_timeout),
 
       .status_frame_active(status_frame_active),
+      .status_sync_wait   (status_sync_wait),
       .frame_count        (frame_count),
 
       .err_cfg_set      (err_cfg_set),
@@ -392,6 +399,7 @@ module axis_video_mixer
       .err_geom_set     (err_geom_set),
       .err_src_stall_set(err_src_stall_set),
       .err_out_stall_set(err_out_stall_set),
+      .err_sync_to_set  (err_sync_to_set),
       .err_layer_set    (err_layer_set),
 
       .lay_en       (lay_en),
@@ -423,13 +431,15 @@ module axis_video_mixer
       .clk  (clk),
       .rst_n(rst_n),
 
-      .ctrl_en       (ctrl_en),
-      .ctrl_soft_rst (ctrl_soft_rst),
-      .canvas_width  (canvas_width),
-      .canvas_height (canvas_height),
-      .background_rgb(background_rgb),
-      .stall_limit   (stall_limit),
-      .lay_en        (lay_en),
+      .ctrl_en        (ctrl_en),
+      .ctrl_soft_rst  (ctrl_soft_rst),
+      .ctrl_sync_start(ctrl_sync_start),
+      .sync_timeout   (sync_timeout),
+      .canvas_width   (canvas_width),
+      .canvas_height  (canvas_height),
+      .background_rgb (background_rgb),
+      .stall_limit    (stall_limit),
+      .lay_en         (lay_en),
       .lay_alpha     (lay_alpha),
       .lay_alpha_src (lay_alpha_src),
       .lay_x         (lay_x),
@@ -438,12 +448,14 @@ module axis_video_mixer
       .lay_h         (lay_h),
 
       .status_frame_active(status_frame_active),
+      .status_sync_wait   (status_sync_wait),
       .frame_count        (frame_count),
       .err_cfg_set        (err_cfg_set),
       .err_starve_set     (err_starve_set),
       .err_geom_set       (err_geom_set),
       .err_src_stall_set  (err_src_stall_set),
       .err_out_stall_set  (err_out_stall_set),
+      .err_sync_to_set    (err_sync_to_set),
       .err_layer_set      (err_layer_set),
       .lay_armed          (lay_armed),
       .lay_dropped        (lay_dropped),
