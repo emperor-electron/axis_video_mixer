@@ -55,7 +55,7 @@ module fv_core_frame
     input logic [P_RGB_W-1:0] act_bg,
     input logic                    act_ok,
     input logic [P_NUM_LAYERS-1:0] act_en,
-    input logic [      P_CH_W-1:0] act_alpha[P_NUM_LAYERS],
+    input logic [P_CH_W*P_NUM_LAYERS-1:0] act_alpha,
     input logic [P_NUM_LAYERS-1:0] act_asrc,
 
     input logic               m_axis_tvalid,
@@ -151,7 +151,9 @@ module fv_core_frame
   always_comb begin
     all_transparent = 1'b1;
     for (int i = 0; i < P_NUM_LAYERS; i++) begin
-      if (act_en[i] && !((act_alpha[i] == '0) && (act_asrc[i] == ALPHA_GLOBAL_ONLY))) begin
+      if (act_en[i] &&
+          !((act_alpha[P_CH_W*i+:P_CH_W] == '0) && (act_asrc[i] == ALPHA_GLOBAL_ONLY)))
+      begin
         all_transparent = 1'b0;
       end
     end

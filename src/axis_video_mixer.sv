@@ -224,21 +224,23 @@ module axis_video_mixer
   logic [31:0] frame_count;
 
   logic err_cfg_set, err_starve_set, err_geom_set, err_src_stall_set, err_out_stall_set;
-  logic err_sync_to_set;
+  logic                    err_sync_to_set;
   logic [P_NUM_LAYERS-1:0] err_layer_set;
 
-  logic [P_NUM_LAYERS-1:0] lay_en;
-  logic [             7:0] lay_alpha       [P_NUM_LAYERS];
-  logic [P_NUM_LAYERS-1:0] lay_alpha_src;
-  logic [            15:0] lay_x           [P_NUM_LAYERS];
-  logic [            15:0] lay_y           [P_NUM_LAYERS];
-  logic [            15:0] lay_w           [P_NUM_LAYERS];
-  logic [            15:0] lay_h           [P_NUM_LAYERS];
+  // Packed, layer i in bits [i*W +: W], matching the core's ports. See the
+  // packing note in axis_video_mixer_core.sv.
+  logic [   P_NUM_LAYERS-1:0] lay_en;
+  logic [ 8*P_NUM_LAYERS-1:0] lay_alpha;
+  logic [   P_NUM_LAYERS-1:0] lay_alpha_src;
+  logic [16*P_NUM_LAYERS-1:0] lay_x;
+  logic [16*P_NUM_LAYERS-1:0] lay_y;
+  logic [16*P_NUM_LAYERS-1:0] lay_w;
+  logic [16*P_NUM_LAYERS-1:0] lay_h;
 
   logic [P_NUM_LAYERS-1:0] lay_armed;
   logic [P_NUM_LAYERS-1:0] lay_dropped;
   logic [P_NUM_LAYERS-1:0] lay_cfg_bad;
-  logic [            15:0] lay_level       [P_NUM_LAYERS];
+  logic [16*P_NUM_LAYERS-1:0] lay_level;
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Gather the named stream ports
@@ -259,54 +261,54 @@ module axis_video_mixer
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   logic [  MAX_LAYERS-1:0] in_tvalid;
   logic [  MAX_LAYERS-1:0] in_tready;
-  logic [    P_BEAT_W-1:0] in_tdata        [MAX_LAYERS];
+  logic [P_BEAT_W*MAX_LAYERS-1:0] in_tdata;
   logic [  MAX_LAYERS-1:0] in_tuser;
   logic [  MAX_LAYERS-1:0] in_tlast;
 
   assign in_tvalid[0]   = s_axis0_tvalid;
-  assign in_tdata[0]    = s_axis0_tdata;
+  assign in_tdata[P_BEAT_W*0+:P_BEAT_W]    = s_axis0_tdata;
   assign in_tuser[0]    = s_axis0_tuser;
   assign in_tlast[0]    = s_axis0_tlast;
   assign s_axis0_tready = in_tready[0];
 
   assign in_tvalid[1]   = s_axis1_tvalid;
-  assign in_tdata[1]    = s_axis1_tdata;
+  assign in_tdata[P_BEAT_W*1+:P_BEAT_W]    = s_axis1_tdata;
   assign in_tuser[1]    = s_axis1_tuser;
   assign in_tlast[1]    = s_axis1_tlast;
   assign s_axis1_tready = in_tready[1];
 
   assign in_tvalid[2]   = s_axis2_tvalid;
-  assign in_tdata[2]    = s_axis2_tdata;
+  assign in_tdata[P_BEAT_W*2+:P_BEAT_W]    = s_axis2_tdata;
   assign in_tuser[2]    = s_axis2_tuser;
   assign in_tlast[2]    = s_axis2_tlast;
   assign s_axis2_tready = in_tready[2];
 
   assign in_tvalid[3]   = s_axis3_tvalid;
-  assign in_tdata[3]    = s_axis3_tdata;
+  assign in_tdata[P_BEAT_W*3+:P_BEAT_W]    = s_axis3_tdata;
   assign in_tuser[3]    = s_axis3_tuser;
   assign in_tlast[3]    = s_axis3_tlast;
   assign s_axis3_tready = in_tready[3];
 
   assign in_tvalid[4]   = s_axis4_tvalid;
-  assign in_tdata[4]    = s_axis4_tdata;
+  assign in_tdata[P_BEAT_W*4+:P_BEAT_W]    = s_axis4_tdata;
   assign in_tuser[4]    = s_axis4_tuser;
   assign in_tlast[4]    = s_axis4_tlast;
   assign s_axis4_tready = in_tready[4];
 
   assign in_tvalid[5]   = s_axis5_tvalid;
-  assign in_tdata[5]    = s_axis5_tdata;
+  assign in_tdata[P_BEAT_W*5+:P_BEAT_W]    = s_axis5_tdata;
   assign in_tuser[5]    = s_axis5_tuser;
   assign in_tlast[5]    = s_axis5_tlast;
   assign s_axis5_tready = in_tready[5];
 
   assign in_tvalid[6]   = s_axis6_tvalid;
-  assign in_tdata[6]    = s_axis6_tdata;
+  assign in_tdata[P_BEAT_W*6+:P_BEAT_W]    = s_axis6_tdata;
   assign in_tuser[6]    = s_axis6_tuser;
   assign in_tlast[6]    = s_axis6_tlast;
   assign s_axis6_tready = in_tready[6];
 
   assign in_tvalid[7]   = s_axis7_tvalid;
-  assign in_tdata[7]    = s_axis7_tdata;
+  assign in_tdata[P_BEAT_W*7+:P_BEAT_W]    = s_axis7_tdata;
   assign in_tuser[7]    = s_axis7_tuser;
   assign in_tlast[7]    = s_axis7_tlast;
   assign s_axis7_tready = in_tready[7];
@@ -321,13 +323,13 @@ module axis_video_mixer
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   logic [P_NUM_LAYERS-1:0] core_tvalid;
   logic [P_NUM_LAYERS-1:0] core_tready;
-  logic [    P_BEAT_W-1:0] core_tdata     [P_NUM_LAYERS];
+  logic [P_BEAT_W*P_NUM_LAYERS-1:0] core_tdata;
   logic [P_NUM_LAYERS-1:0] core_tuser;
   logic [P_NUM_LAYERS-1:0] core_tlast;
 
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_stream_used
     assign core_tvalid[gi] = in_tvalid[gi];
-    assign core_tdata[gi]  = in_tdata[gi];
+    assign core_tdata[P_BEAT_W*gi+:P_BEAT_W] = in_tdata[P_BEAT_W*gi+:P_BEAT_W];
     assign core_tuser[gi]  = in_tuser[gi];
     assign core_tlast[gi]  = in_tlast[gi];
     assign in_tready[gi]   = core_tready[gi];
@@ -344,7 +346,7 @@ module axis_video_mixer
     // clean-lint policy has to waive in bulk, and bulk waivers hide the real
     // one. See doc/design.md 11.8.
     logic unused_stream;
-    assign unused_stream = ^{in_tvalid[gi], in_tuser[gi], in_tlast[gi], in_tdata[gi]};
+    assign unused_stream = ^{in_tvalid[gi], in_tuser[gi], in_tlast[gi], in_tdata[P_BEAT_W*gi+:P_BEAT_W]};
   end
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -440,12 +442,12 @@ module axis_video_mixer
       .background_rgb (background_rgb),
       .stall_limit    (stall_limit),
       .lay_en         (lay_en),
-      .lay_alpha     (lay_alpha),
-      .lay_alpha_src (lay_alpha_src),
-      .lay_x         (lay_x),
-      .lay_y         (lay_y),
-      .lay_w         (lay_w),
-      .lay_h         (lay_h),
+      .lay_alpha      (lay_alpha),
+      .lay_alpha_src  (lay_alpha_src),
+      .lay_x          (lay_x),
+      .lay_y          (lay_y),
+      .lay_w          (lay_w),
+      .lay_h          (lay_h),
 
       .status_frame_active(status_frame_active),
       .status_sync_wait   (status_sync_wait),
@@ -490,8 +492,7 @@ module axis_video_mixer
     // and the register map is generated for the same number. Asking for more
     // would leave the extra layers with no stream and no registers.
     if (P_NUM_LAYERS < 1 || P_NUM_LAYERS > MAX_LAYERS) begin
-      $fatal(1, "axis_video_mixer: P_NUM_LAYERS=%0d out of range 1..%0d", P_NUM_LAYERS,
-             MAX_LAYERS);
+      $fatal(1, "axis_video_mixer: P_NUM_LAYERS=%0d out of range 1..%0d", P_NUM_LAYERS, MAX_LAYERS);
     end
     if (!ppc_legal(P_PPC)) begin
       $fatal(1, "axis_video_mixer: P_PPC=%0d must be 1, 2, 4 or 8", P_PPC);

@@ -118,16 +118,16 @@ module fv_core
     input logic [            23:0] background_rgb_i,
     input logic [            31:0] stall_limit_i,
     input logic [P_NUM_LAYERS-1:0] lay_en_i,
-    input logic [             7:0] lay_alpha_i    [P_NUM_LAYERS],
-    input logic [P_NUM_LAYERS-1:0] lay_alpha_src_i,
-    input logic [            15:0] lay_x_i        [P_NUM_LAYERS],
-    input logic [            15:0] lay_y_i        [P_NUM_LAYERS],
-    input logic [            15:0] lay_w_i        [P_NUM_LAYERS],
-    input logic [            15:0] lay_h_i        [P_NUM_LAYERS],
+    input logic [ 8*P_NUM_LAYERS-1:0] lay_alpha_i,
+    input logic [   P_NUM_LAYERS-1:0] lay_alpha_src_i,
+    input logic [16*P_NUM_LAYERS-1:0] lay_x_i,
+    input logic [16*P_NUM_LAYERS-1:0] lay_y_i,
+    input logic [16*P_NUM_LAYERS-1:0] lay_w_i,
+    input logic [16*P_NUM_LAYERS-1:0] lay_h_i,
 
     // Free sources.
     input logic [P_NUM_LAYERS-1:0] s_axis_tvalid,
-    input logic [    P_BEAT_W-1:0] s_axis_tdata [P_NUM_LAYERS],
+    input logic [P_BEAT_W*P_NUM_LAYERS-1:0] s_axis_tdata,
     input logic [P_NUM_LAYERS-1:0] s_axis_tuser,
     input logic [P_NUM_LAYERS-1:0] s_axis_tlast,
 
@@ -160,12 +160,12 @@ module fv_core
   logic [            23:0] background_rgb;
   logic [            31:0] stall_limit;
   logic [P_NUM_LAYERS-1:0] lay_en;
-  logic [             7:0] lay_alpha                   [P_NUM_LAYERS];
-  logic [P_NUM_LAYERS-1:0] lay_alpha_src;
-  logic [            15:0] lay_x                       [P_NUM_LAYERS];
-  logic [            15:0] lay_y                       [P_NUM_LAYERS];
-  logic [            15:0] lay_w                       [P_NUM_LAYERS];
-  logic [            15:0] lay_h                       [P_NUM_LAYERS];
+  logic [ 8*P_NUM_LAYERS-1:0] lay_alpha;
+  logic [   P_NUM_LAYERS-1:0] lay_alpha_src;
+  logic [16*P_NUM_LAYERS-1:0] lay_x;
+  logic [16*P_NUM_LAYERS-1:0] lay_y;
+  logic [16*P_NUM_LAYERS-1:0] lay_w;
+  logic [16*P_NUM_LAYERS-1:0] lay_h;
 
   if (FV_STATIC_CFG) begin : g_static_cfg
     logic                    q_en;
@@ -173,12 +173,12 @@ module fv_core
     logic [            23:0] q_bg;
     logic [            31:0] q_sl;
     logic [P_NUM_LAYERS-1:0] q_lay_en;
-    logic [             7:0] q_alpha         [P_NUM_LAYERS];
-    logic [P_NUM_LAYERS-1:0] q_asrc;
-    logic [            15:0] q_x             [P_NUM_LAYERS];
-    logic [            15:0] q_y             [P_NUM_LAYERS];
-    logic [            15:0] q_w             [P_NUM_LAYERS];
-    logic [            15:0] q_h             [P_NUM_LAYERS];
+    logic [ 8*P_NUM_LAYERS-1:0] q_alpha;
+    logic [   P_NUM_LAYERS-1:0] q_asrc;
+    logic [16*P_NUM_LAYERS-1:0] q_x;
+    logic [16*P_NUM_LAYERS-1:0] q_y;
+    logic [16*P_NUM_LAYERS-1:0] q_w;
+    logic [16*P_NUM_LAYERS-1:0] q_h;
 
     always_ff @(posedge clk) begin
       if (fv_in_reset) begin
@@ -189,13 +189,12 @@ module fv_core
         q_sl     <= stall_limit_i;
         q_lay_en <= lay_en_i;
         q_asrc   <= lay_alpha_src_i;
-        for (int i = 0; i < P_NUM_LAYERS; i++) begin
-          q_alpha[i] <= lay_alpha_i[i];
-          q_x[i]     <= lay_x_i[i];
-          q_y[i]     <= lay_y_i[i];
-          q_w[i]     <= lay_w_i[i];
-          q_h[i]     <= lay_h_i[i];
-        end
+        // Whole vectors now, so the per-layer loop went with the unpacking.
+        q_alpha <= lay_alpha_i;
+        q_x     <= lay_x_i;
+        q_y     <= lay_y_i;
+        q_w     <= lay_w_i;
+        q_h     <= lay_h_i;
       end
     end
 
@@ -236,7 +235,7 @@ module fv_core
   logic                    err_src_stall_set, err_out_stall_set, err_sync_to_set;
   logic [P_NUM_LAYERS-1:0] err_layer_set;
   logic [P_NUM_LAYERS-1:0] lay_armed, lay_dropped, lay_cfg_bad;
-  logic [            15:0] lay_level                       [P_NUM_LAYERS];
+  logic [16*P_NUM_LAYERS-1:0] lay_level;
   logic [P_NUM_LAYERS-1:0] s_axis_tready;
   logic                    m_axis_tvalid, m_axis_tuser, m_axis_tlast;
   logic [     P_OUT_W-1:0] m_axis_tdata;

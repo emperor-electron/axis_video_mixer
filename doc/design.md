@@ -833,6 +833,12 @@ grounds that unpacked array ports do not survive an IP-XACT or block design
 boundary. They do not, but a packed vector is the wrong fix, because the thing
 that has to survive the boundary is not the *array*, it is the *interface*.
 
+This is about the **external boundary only**, and does not conflict with §14.
+Inside the block everything is packed, including the vectors these forty ports
+gather into. What §14 rules out is an unpacked array *signal*; what this section
+rules out is one wide port in place of a named port per stream. Both hold at
+once: forty named scalar ports on the outside, packed vectors behind them.
+
 Interface inference in Vivado's IP packager and in a block design keys on the
 port name. Given `s_axis3_tdata`, `s_axis3_tvalid`, `s_axis3_tready`,
 `s_axis3_tuser` and `s_axis3_tlast` it recognises an AXI4-Stream slave called
@@ -911,7 +917,7 @@ back afterwards.
 
 It is not free. The map carries eight layer blocks whatever the build
 instantiates, so a four-layer build pays for four sets of registers it never
-reads: 74 bits each, 296 flip-flops, about 0.3% of the block's flops (§14).
+reads: 74 bits each, 296 flip-flops, about 0.3% of the block's flops (§15).
 Writable, readable, connected to nothing. The alternative is a map per layer
 count, and with it a C header per layer count, a copy of the register
 documentation per layer count, and an elaboration-time check whose whole job is
@@ -991,9 +997,11 @@ One line instead of eight, and three defects. It reads most-significant first,
 which is reverse index order, so the eye has to count backwards from 7 to check
 it. The index being assigned never appears on the page at all — the mapping is
 implied by position, which is precisely the information a reviewer cannot
-verify by looking. And it does not work for `TDATA` at all, because that is an
-unpacked array and a concatenation cannot target one, so the file ends up with
-two different styles and the reader has to hold both.
+verify by looking. And while `TDATA` was an unpacked array a concatenation
+could not target it at all, so the file ended up in two styles and the reader
+had to hold both; now that it is packed (§14) a concatenation would compile,
+which makes this worse rather than better — the one defect that used to stop you
+is gone and the two that matter are not.
 
 Per-element, the index and the port name sit next to each other on every line.
 A transposition is then something you see rather than something you
@@ -1031,9 +1039,11 @@ anything. It is the wrong answer when the parent's nets are named for what they
 unreadable to buy tidiness in one instantiation.
 
 **An array in the parent, forty named connections.** What the testbench does:
-hold the streams in unpacked arrays, connect `s_axis3_tdata` to `s_tdata[3]`,
-and generate everything upstream of that in a loop. The list is mechanical and
-reviewable by the §11.6 rule — index next to name on every line.
+hold the streams in one vector per signal, connect `s_axis3_tdata` to
+`s_tdata[LP_TDATA_W*3 +: LP_TDATA_W]`, and generate everything upstream of that
+in a loop. The list is mechanical and reviewable by the §11.6 rule — index next
+to name on every line. Read §14 before writing the loop; the shape of that
+array is load bearing.
 
 **Interface ports.** An `interface` array would make this one declaration, and
 is the right tool inside a testbench. It is the wrong tool on the boundary of
@@ -1042,16 +1052,22 @@ consumer, which is the same objection that sank the packed vector in §11.1, so
 the problem comes back one level out.
 
 **The trap worth the most.** In a bench, each stream usually has its own driving
-process. If the signal those processes write is a *packed vector* and each
-writes one bit of it, you can get a silent nothing: eight `initial` blocks each
-doing `s_tvalid[gl] <= 1'b1` left `s_tvalid` at zero for the whole simulation,
-with no multiple-driver warning from the simulator, and the symptom was a DUT
-that configured perfectly and never armed a layer. Making it an unpacked array
-— `logic s_tvalid[MAX_LAYERS]`, one element per stream — fixed it outright.
+process. If the signal those processes write is a packed vector and each
+*procedurally* writes one bit of it, you can get a silent nothing: eight
+`initial` blocks each doing `s_tvalid[gl] <= 1'b1` left `s_tvalid` at zero for
+the whole simulation, with no multiple-driver warning from the simulator, and
+the symptom was a DUT that configured perfectly and never armed a layer.
 
-So: in a bench, one element per stream, unpacked, and never a bit-select of a
-packed vector written from more than one process. The same applies to `TDATA`
-if it is held as `[N*W-1:0]` rather than `[W-1:0] [N]`.
+The fix at the time was an unpacked array, one element per stream, and it
+worked. It was also the wrong lesson, and this document drew it for one
+revision: unpacked was never the point. The point is **one driver per vector**.
+These are packed vectors now and the bench drives them with continuous
+assignments out of a generate loop, which is fine — several structural drivers
+on disjoint bit-selects resolve correctly in every tool. What is not fine, in a
+bench or in RTL, is several *processes* writing bit-selects of one vector.
+
+So: a packed vector per signal, and exactly one thing writing it. §14 is the
+rule in full, and what it cost the blend cascade to obey it.
 
 **Drive the streams you are not using to idle.** `TVALID` low, and the payload
 to anything defined. The DUT holds their `TREADY` low and ignores them, so it
@@ -1303,7 +1319,7 @@ are working. The status registers are the only place that distinction exists.
 | Output | Driven by | Meaning |
 |---|---|---|
 | `m_axis_tvalid` | `v_q[P_NUM_LAYERS]` | a flip-flop, never a function of `TREADY` (§3.4) |
-| `m_axis_tdata` | `{acc_q[P_NUM_LAYERS][j], LP_OPAQUE}` per lane | lane 0 in the LSBs |
+| `m_axis_tdata` | `{acc_q[ACC(P_NUM_LAYERS, j) +: P_RGB_W], LP_OPAQUE}` per lane | lane 0 in the LSBs; `ACC` is §14.2 |
 | `m_axis_tuser` | `sof_q[P_NUM_LAYERS]` | **SOF** — first beat of the frame only |
 | `m_axis_tlast` | `eol_q[P_NUM_LAYERS]` | **EOL** — last beat of *every line* |
 
@@ -1459,8 +1475,9 @@ asserts that soft start does not exist.
 and holds a full line of itself:
 
 ```systemverilog
-assign need = (act_bw_l[gi] > LP_PREFILL_CAP) ? LP_PREFILL_CAP : act_bw_l[gi];
-assign lay_prefilled[gi] = lay_armed[gi] && (lay_level[gi] >= need);
+assign need = (act_bw_l[16*gi+:16] > LP_PREFILL_CAP) ? LP_PREFILL_CAP
+                                                     : act_bw_l[16*gi+:16];
+assign lay_prefilled[gi] = lay_armed[gi] && (lay_level[16*gi+:16] >= need);
 assign sync_hold = |(act_en & ~lay_prefilled);
 ```
 
@@ -1546,7 +1563,158 @@ you would rather have a degraded picture immediately than a correct one late.
 
 ---
 
-## 14. Results
+## 14. Packed signals, and the one rule that makes them safe
+
+Every multi-element signal in this design is a packed vector. There are no
+unpacked array signals anywhere in `src/`, `formal/` or the bench, with two
+deliberate exceptions named at the end.
+
+### 14.1 Why
+
+**XSIM does not plot an unpacked array in its waveform window.** That is the
+whole reason, and it is enough of one. Most of what you need to see while
+bringing this block up — each layer's buffered pixel, the alpha travelling
+beside it, the accumulator at each stage of the cascade, each layer's window
+after the frame latch — lived in unpacked arrays, which meant that the signals
+that explain the picture were the exact signals you could not look at. A
+pipeline you cannot see in a waveform is a pipeline you debug by `$display`.
+
+Nothing about the hardware changes. An unpacked array of `N` elements of `W`
+bits and a packed vector of `N*W` bits synthesise to the same flops; the
+difference is entirely in what the tools will show you and in what the language
+lets you do to it.
+
+### 14.2 The convention
+
+Element `i` lives in bits `[i*W +: W]`, and in a multi-dimensional case the
+**last index varies fastest**, so the flattening reads the way a concatenation
+of the old array would have:
+
+| Was | Is | Element |
+|---|---|---|
+| `lay_x[P_NUM_LAYERS]`, 16 bits | `[16*P_NUM_LAYERS-1:0] lay_x` | `lay_x[16*i +: 16]` |
+| `pxf_q[layer][lane]` | one vector | `pxf_q[PXF(i,j) +: P_PX_W]` |
+| `acc_q[stage][lane]` | one vector | `acc_q[ACC(k,j) +: P_RGB_W]` |
+| `lrgb_q[stage][layer][lane]` | one vector | `lrgb_q[LRGB(k,i,j) +: P_RGB_W]` |
+| `v_q[stage]`, 1 bit | `[P_NUM_LAYERS:0] v_q` | `v_q[k]` — no helper needed |
+
+The index arithmetic for anything beyond one dimension is written **once**, as a
+function returning a bit offset, and never spelled out at a use site:
+
+```systemverilog
+function automatic int LRGB(input int k, input int i, input int j);
+  return ((k * P_NUM_LAYERS + i) * P_PPC + j) * P_RGB_W;
+endfunction
+```
+
+Each is always paired with its own `+: width`, and that width is always a
+constant — it has to be. An indexed part-select may have a variable base and a
+constant width, never the other way round, which is the same restriction that
+shaped the package accessors in §12.2.
+
+### 14.3 The rule: one driver per vector
+
+This is the part that bites, and it is worth stating as a rule rather than a
+caution:
+
+> A packed vector may be written by continuous assignments from as many places
+> as you like, provided they target disjoint bits. It may be written
+> **procedurally by exactly one process.**
+
+Continuous assignment is fine. `assign lay_prefilled[gi] = ...` from eight
+generate blocks, or eight module output ports each driving `s_tready[i]`, or
+`assign in_tdata[P_BEAT_W*gi +: P_BEAT_W] = ...` — all of these resolve
+correctly in every tool, because they are structural drivers on disjoint bits.
+
+Several *processes* writing disjoint bit-selects of one vector is a different
+thing entirely. **Vivado** calls it multiple drivers and refuses to elaborate.
+Verilator is less predictable, and the difference is worth knowing because it
+decides whether you find this in ten seconds or in a day:
+
+- Two `always_ff` blocks in the same scope — what packing the cascade produced
+  — were caught. Verilator named the signal and the second writer, and §14.4 is
+  that warning.
+- Eight `initial` blocks created by a generate loop, each writing one bit —
+  the bench case in §11.7 — were **not**. The writes were silently dropped with
+  no `MULTIDRIVEN` and no hint, and the symptom was a DUT that configured
+  perfectly and never armed a layer.
+
+So do not rely on the warning. It fired for the case in §14.4 and it is the
+reason that one took ten seconds to find, but it did not fire for §11.7's, and
+nothing in the language says which you will get.
+
+With unpacked arrays this never arose: `acc_q[0][j]` and `acc_q[gk+1][j]` are
+different *elements*, which separate processes may legally write. Packed, they
+are slices of one vector, and the generate-per-stage structure the cascade had
+used since the beginning stopped being legal.
+
+### 14.4 What that cost: the blend cascade
+
+The cascade was a generate loop with one `always_ff` per stage. It is now one
+`always_ff` containing an unrolled `for` loop over the stages, because stage A
+writes slice 0 of `acc_q`, `lrgb_q` and `la_q` and the cascade writes slices
+1..N — two processes, one vector each. Verilator said so plainly:
+
+```
+%Warning-MULTIDRIVEN: Variable written to in always_ff also written
+                      by other process: 'acc_q'
+```
+
+So stage A and the cascade merged into a single process. Three things to know
+about that:
+
+**It is the same hardware.** The loop bound is constant, so every iteration is
+its own set of flops and its own multiply, exactly as every generate iteration
+was. One multiply per stage, unchanged combinational depth, unchanged flop
+count.
+
+**The non-blocking semantics are unchanged**, which is why it is safe. Inside
+one `always_ff`, `acc_q[ACC(k+1,j)] <= f(acc_q[ACC(k,j)])` still reads the
+pre-edge value of stage `k`, exactly as it did when stage `k` was written by a
+different process. The pipeline still shifts by one stage per enabled clock.
+
+**No bit is written twice.** Stage A writes slice 0, the loop writes slices
+1..N. Worth checking by hand whenever you add to this, because the last
+non-blocking write to a bit wins and the language will not warn you.
+
+### 14.5 The two exceptions
+
+**`axis_mixer_fifo`'s `mem`.** Still `logic [P_WIDTH-1:0] mem[P_DEPTH]`, and it
+should stay that way. It carries `(* ram_style = "block" *)`, and packing it
+into one vector is how you turn 2 RAMB36 into 65536 flip-flops: a 2048 × 32
+line buffer stops being a memory the moment it stops looking like one to
+inference. XSIM shows a memory in its own memory viewer rather than as a
+waveform trace anyway, so packing it would cost the block RAM and not even buy
+the thing this section is about.
+
+**UVM class properties.** `mixer_scoreboard`'s `lay_x`, `lay_alpha` and the
+rest are class members, not signals. They are never in a waveform window under
+any encoding, so packing them would be bit arithmetic on software variables for
+no benefit at all.
+
+### 14.6 How the conversion was checked
+
+A refactor that claims to change nothing should be made to prove it. The
+pre-refactor core was taken from git, renamed, and instantiated alongside the
+post-refactor core with both fed from exactly the same wires — identical
+stimulus, identical random sink backpressure, a soft reset part way through, and
+layers enabled and disabled under way. Every output of both was compared on
+every clock edge: `TVALID`, `TDATA`, `TUSER`, `TLAST`, all five `TREADY`s, every
+status and error strobe, `FRAME_COUNT`.
+
+**32 configurations** — `P_NUM_LAYERS` ∈ {1,2,4,8} × `P_PPC` ∈ {1,2,4,8} ×
+`P_CH_W` ∈ {8,16} — about 4000 cycles and 3600 output beats each. Zero
+mismatches in all 32.
+
+That is the check worth running if you re-flatten any of this, and it matters
+most at `P_PPC > 1` and `P_NUM_LAYERS > 1`: those are the only configurations
+where the two- and three-dimensional index functions can be wrong, and
+`tb/smoke` runs at one layer and one pixel per clock, so it would not have
+caught a mistake in them.
+
+---
+
+## 15. Results
 
 Out-of-context, `xc7z045ffg900-2`, N = 4, `P_CH_W = 8`, constrained at
 **148.5 MHz** (`syn/syn.tcl`, 6.734 ns) — the 1080p60 pixel clock, so the

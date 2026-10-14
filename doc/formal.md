@@ -70,8 +70,10 @@ All three ship in the [OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-b
 `make -C formal tools` checks for them and says what is missing.
 
 **yosys-slang is not optional.** Yosys's built-in Verilog frontend cannot read
-this RTL: unpacked array ports, packages with functions, `import` in the module
-header, and multi-dimensional unpacked arrays are all used, and all beyond it.
+this RTL: packages with functions, `import` in the module header, functions
+called in part-select bases, and `bind` are all used, and all beyond it. The
+unpacked array ports that used to be on that list are gone — everything is a
+packed vector now (doc/design.md §14) — but nothing else on it is.
 The slang frontend elaborates the whole design, testbench-grade SystemVerilog
 included, which is what makes a formal flow possible here at all without an
 `sv2v` step that would obscure every line number.
@@ -627,7 +629,7 @@ proofs and 49 tasks. Assertions inside per-layer and per-lane generate loops
 are elaborated once per instance, so the checked count is higher.
 
 ```bash
-make -C formal            # everything, about six minutes from clean
+make -C formal            # everything, under four minutes from clean
 make -C formal quick      # every bmc task plus the cheap blend groups, ~30 s
 make -C formal core TASKS=prove
 make -C formal blend TASKS="div16 up16"
@@ -643,8 +645,8 @@ make -C formal blend TASKS="div16 up16"
 | `fv_core` | `frame` `deep` `datapath` | pass | 89 s, 239 s, 234 s |
 | `fv_top` | `bmc` `prove` `wire8` `deep` `cover` | pass | ~25 s |
 
-Just under six minutes for the whole suite from clean on one machine, most of
-it the three `fv_core` outliers; `sby` runs the tasks of one file in parallel,
+Under four minutes for the whole suite from clean on one machine, most of it
+the three `fv_core` outliers; `sby` runs the tasks of one file in parallel,
 so a unit costs its slowest task rather than the sum. `make quick` is the
 subset worth running while editing RTL and takes just over thirty seconds —
 every `bmc` task plus the three cheap 8-bit blend groups, which between them
@@ -657,7 +659,10 @@ costs no more than running one used to. §4 is what those two groups are and why
 they run at 8 bits alone.
 
 Soft start made those three outliers dearer — `deep` roughly doubled — because
-`sync_cnt` is 32 bits of state the solver now carries through every step. The
+`sync_cnt` is 32 bits of state the solver now carries through every step.
+Packing the arrays (doc/design.md §14) then gave most of it back: the suite went
+from 5m53 to 3m40, which is not the point of the change but is a fair hint that
+one vector is easier for a solver to reason about than an array of them. The
 `fv_core prove` task went the other way: adding the `a_raster_parked_while_gated`
 lemma took it from failing in 67 s to proving in 6 s, which is the usual shape of
 a good lemma.
