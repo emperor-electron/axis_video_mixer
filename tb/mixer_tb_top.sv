@@ -86,7 +86,7 @@ module mixer_tb_top;
   // several always blocks are not.
   localparam int LP_TDATA_W = MIX_DATA_BYTES * 8;
 
-  logic [LP_TDATA_W*MIX_MAX_LAYERS-1:0] s_tdata;
+  logic [MIX_MAX_LAYERS-1:0][LP_TDATA_W-1:0] s_tdata;
   logic [        MIX_MAX_LAYERS-1:0] s_tvalid;
   logic [        MIX_MAX_LAYERS-1:0] s_tready;
   logic [        MIX_MAX_LAYERS-1:0] s_tuser;
@@ -94,7 +94,7 @@ module mixer_tb_top;
 
   for (genvar gi = 0; gi < NUM_LAYERS; gi++) begin : g_layer_wire
     assign s_tvalid[gi] = layer_if[gi].tvalid;
-    assign s_tdata[LP_TDATA_W*gi+:LP_TDATA_W] = layer_if[gi].tdata;
+    assign s_tdata[gi]  = layer_if[gi].tdata;
     assign s_tuser[gi]  = layer_if[gi].tuser[0];
     assign s_tlast[gi]  = layer_if[gi].tlast;
     assign layer_if[gi].tready = s_tready[gi];
@@ -102,7 +102,7 @@ module mixer_tb_top;
 
   for (genvar gi = NUM_LAYERS; gi < MIX_MAX_LAYERS; gi++) begin : g_layer_idle
     assign s_tvalid[gi] = 1'b0;
-    assign s_tdata[LP_TDATA_W*gi+:LP_TDATA_W] = '0;
+    assign s_tdata[gi]  = '0;
     assign s_tuser[gi]  = 1'b0;
     assign s_tlast[gi]  = 1'b0;
   end
@@ -160,49 +160,49 @@ module mixer_tb_top;
 
       .s_axis0_tvalid(s_tvalid[0]),
       .s_axis0_tready(s_tready[0]),
-      .s_axis0_tdata (s_tdata[LP_TDATA_W*0+:LP_TDATA_W]),
+      .s_axis0_tdata (s_tdata[0]),
       .s_axis0_tuser (s_tuser[0]),
       .s_axis0_tlast (s_tlast[0]),
 
       .s_axis1_tvalid(s_tvalid[1]),
       .s_axis1_tready(s_tready[1]),
-      .s_axis1_tdata (s_tdata[LP_TDATA_W*1+:LP_TDATA_W]),
+      .s_axis1_tdata (s_tdata[1]),
       .s_axis1_tuser (s_tuser[1]),
       .s_axis1_tlast (s_tlast[1]),
 
       .s_axis2_tvalid(s_tvalid[2]),
       .s_axis2_tready(s_tready[2]),
-      .s_axis2_tdata (s_tdata[LP_TDATA_W*2+:LP_TDATA_W]),
+      .s_axis2_tdata (s_tdata[2]),
       .s_axis2_tuser (s_tuser[2]),
       .s_axis2_tlast (s_tlast[2]),
 
       .s_axis3_tvalid(s_tvalid[3]),
       .s_axis3_tready(s_tready[3]),
-      .s_axis3_tdata (s_tdata[LP_TDATA_W*3+:LP_TDATA_W]),
+      .s_axis3_tdata (s_tdata[3]),
       .s_axis3_tuser (s_tuser[3]),
       .s_axis3_tlast (s_tlast[3]),
 
       .s_axis4_tvalid(s_tvalid[4]),
       .s_axis4_tready(s_tready[4]),
-      .s_axis4_tdata (s_tdata[LP_TDATA_W*4+:LP_TDATA_W]),
+      .s_axis4_tdata (s_tdata[4]),
       .s_axis4_tuser (s_tuser[4]),
       .s_axis4_tlast (s_tlast[4]),
 
       .s_axis5_tvalid(s_tvalid[5]),
       .s_axis5_tready(s_tready[5]),
-      .s_axis5_tdata (s_tdata[LP_TDATA_W*5+:LP_TDATA_W]),
+      .s_axis5_tdata (s_tdata[5]),
       .s_axis5_tuser (s_tuser[5]),
       .s_axis5_tlast (s_tlast[5]),
 
       .s_axis6_tvalid(s_tvalid[6]),
       .s_axis6_tready(s_tready[6]),
-      .s_axis6_tdata (s_tdata[LP_TDATA_W*6+:LP_TDATA_W]),
+      .s_axis6_tdata (s_tdata[6]),
       .s_axis6_tuser (s_tuser[6]),
       .s_axis6_tlast (s_tlast[6]),
 
       .s_axis7_tvalid(s_tvalid[7]),
       .s_axis7_tready(s_tready[7]),
-      .s_axis7_tdata (s_tdata[LP_TDATA_W*7+:LP_TDATA_W]),
+      .s_axis7_tdata (s_tdata[7]),
       .s_axis7_tuser (s_tuser[7]),
       .s_axis7_tlast (s_tlast[7]),
 

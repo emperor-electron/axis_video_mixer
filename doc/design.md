@@ -1626,11 +1626,12 @@ you would rather have a degraded picture immediately than a correct one late.
 
 ---
 
-## 14. Packed signals, and the one rule that makes them safe
+## 14. Packed arrays, and the one rule that makes them safe
 
-Every multi-element signal in this design is a packed vector. There are no
-unpacked array signals anywhere in `src/`, `formal/` or the bench, with two
-deliberate exceptions named at the end.
+Every multi-element signal in this design is a **packed array** — not an
+unpacked array, and not a flat vector either. There are no unpacked array
+signals anywhere in `src/`, `formal/` or the bench, with two deliberate
+exceptions named at the end.
 
 ### 14.1 Why
 
@@ -1643,54 +1644,72 @@ that explain the picture were the exact signals you could not look at. A
 pipeline you cannot see in a waveform is a pipeline you debug by `$display`.
 
 Nothing about the hardware changes. An unpacked array of `N` elements of `W`
-bits and a packed vector of `N*W` bits synthesise to the same flops; the
-difference is entirely in what the tools will show you and in what the language
-lets you do to it.
+bits and a packed `N × W` array synthesise to the same flops; the difference is
+entirely in what the tools will show you and in what the language lets you do
+to it.
+
+**A flat vector is the wrong way to get there**, and this was built that way
+once before being corrected. `logic [16*P_NUM_LAYERS-1:0] lay_x` plots in a
+waveform perfectly well, but it costs the indexing: the layer stops being a
+subscript and becomes `lay_x[16*i +: 16]` at every use site, and a
+three-dimensional signal needs a helper function per signal just to compute the
+offset. That is the datapath made harder to read in order to satisfy a waveform
+viewer, which is a bad trade and was rightly rejected.
+
+A packed array is both halves at once. `logic [N-1:0][W-1:0] x` **is** the flat
+vector — `x[i]` is bits `[i*W +: W]`, same layout, same hardware — while `x[i]`
+and `x[k][i][j]` stay subscripts.
 
 ### 14.2 The convention
 
-Element `i` lives in bits `[i*W +: W]`, and in a multi-dimensional case the
-**last index varies fastest**, so the flattening reads the way a concatenation
-of the old array would have:
+Outermost dimension first, in the order the pipeline runs: `[stage][layer][lane]`.
 
 | Was | Is | Element |
 |---|---|---|
-| `lay_x[P_NUM_LAYERS]`, 16 bits | `[16*P_NUM_LAYERS-1:0] lay_x` | `lay_x[16*i +: 16]` |
-| `pxf_q[layer][lane]` | one vector | `pxf_q[PXF(i,j) +: P_PX_W]` |
-| `acc_q[stage][lane]` | one vector | `acc_q[ACC(k,j) +: P_RGB_W]` |
-| `lrgb_q[stage][layer][lane]` | one vector | `lrgb_q[LRGB(k,i,j) +: P_RGB_W]` |
-| `v_q[stage]`, 1 bit | `[P_NUM_LAYERS:0] v_q` | `v_q[k]` — no helper needed |
+| `lay_x[P_NUM_LAYERS]`, 16 bits | `[P_NUM_LAYERS-1:0][15:0] lay_x` | `lay_x[i]` |
+| `pxf_q[layer][lane]` | `[P_NUM_LAYERS-1:0][P_PPC-1:0][P_PX_W-1:0]` | `pxf_q[i][j]` |
+| `acc_q[stage][lane]` | `[P_NUM_LAYERS:0][P_PPC-1:0][P_RGB_W-1:0]` | `acc_q[k][j]` |
+| `lrgb_q[stage][layer][lane]` | `[P_NUM_LAYERS:0][P_NUM_LAYERS-1:0][P_PPC-1:0][P_RGB_W-1:0]` | `lrgb_q[k][i][j]` |
+| `v_q[stage]`, 1 bit | `[P_NUM_LAYERS:0] v_q` | `v_q[k]` |
 
-The index arithmetic for anything beyond one dimension is written **once**, as a
-function returning a bit offset, and never spelled out at a use site:
+Every subscript is the same as it was when these were unpacked arrays, which is
+the point: the cascade reads
 
 ```systemverilog
-function automatic int LRGB(input int k, input int i, input int j);
-  return ((k * P_NUM_LAYERS + i) * P_PPC + j) * P_RGB_W;
-endfunction
+acc_q[k+1][j] <= P_RGB_W'(blend_rgb(P_CH_W, RGB_MAX_W'(lrgb_q[k][k][j]),
+                                    RGB_MAX_W'(acc_q[k][j]),
+                                    CH_MAX_W'(la_q[k][k][j])));
 ```
 
-Each is always paired with its own `+: width`, and that width is always a
-constant — it has to be. An indexed part-select may have a variable base and a
-constant width, never the other way round, which is the same restriction that
-shaped the package accessors in §12.2.
+and not a line of bit arithmetic.
+
+A bit-level part-select still works where one is genuinely wanted — `lay_px[i]`
+is a whole beat and `lay_px[i][j*P_PX_W +: P_PX_W]` is lane `j` of it, which is
+the one place a lane has to be cut out of a beat rather than indexed. The width
+of a part-select is always a constant, which it has to be: the base may vary,
+the width may not. That is the same restriction that shaped the package
+accessors in §12.2.
 
 ### 14.3 The rule: one driver per vector
 
 This is the part that bites, and it is worth stating as a rule rather than a
 caution:
 
-> A packed vector may be written by continuous assignments from as many places
-> as you like, provided they target disjoint bits. It may be written
+> A packed array may be written by continuous assignments from as many places
+> as you like, provided they target disjoint elements. It may be written
 > **procedurally by exactly one process.**
+>
+> A packed array is one vector. `x[i]` is a bit-select of it, not a separate
+> object, which is exactly why this rule applies to it and did not apply to the
+> unpacked array it replaced.
 
 Continuous assignment is fine. `assign lay_prefilled[gi] = ...` from eight
 generate blocks, or eight module output ports each driving `s_tready[i]`, or
 `assign in_tdata[P_BEAT_W*gi +: P_BEAT_W] = ...` — all of these resolve
 correctly in every tool, because they are structural drivers on disjoint bits.
 
-Several *processes* writing disjoint bit-selects of one vector is a different
-thing entirely. **Vivado** calls it multiple drivers and refuses to elaborate.
+Several *processes* writing disjoint elements of one packed array is a
+different thing entirely. **Vivado** calls it multiple drivers and refuses to elaborate.
 Verilator is less predictable, and the difference is worth knowing because it
 decides whether you find this in ten seconds or in a day:
 
@@ -1707,9 +1726,11 @@ reason that one took ten seconds to find, but it did not fire for §11.7's, and
 nothing in the language says which you will get.
 
 With unpacked arrays this never arose: `acc_q[0][j]` and `acc_q[gk+1][j]` are
-different *elements*, which separate processes may legally write. Packed, they
-are slices of one vector, and the generate-per-stage structure the cascade had
-used since the beginning stopped being legal.
+different *objects*, which separate processes may legally write. Packed — as a
+flat vector or as an array, it makes no difference — they are slices of one
+vector, and the generate-per-stage structure the cascade had used since the
+beginning stopped being legal. The subscripts came back when the flat vectors
+became arrays; this restriction did not go with them.
 
 ### 14.4 What that cost: the blend cascade
 
@@ -1767,7 +1788,10 @@ status and error strobe, `FRAME_COUNT`.
 
 **32 configurations** — `P_NUM_LAYERS` ∈ {1,2,4,8} × `P_PPC` ∈ {1,2,4,8} ×
 `P_CH_W` ∈ {8,16} — about 4000 cycles and 3600 output beats each. Zero
-mismatches in all 32.
+mismatches in all 32. The same harness was run again, against the same 32
+configurations, when the flat vectors became packed arrays: a packed array has
+the identical bit layout, so that step should have been a pure re-spelling, and
+it was.
 
 That is the check worth running if you re-flatten any of this, and it matters
 most at `P_PPC > 1` and `P_NUM_LAYERS > 1`: those are the only configurations

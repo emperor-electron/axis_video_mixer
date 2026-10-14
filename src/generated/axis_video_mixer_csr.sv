@@ -94,21 +94,21 @@ module axis_video_mixer_csr #(
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Per-layer configuration out, status in
     ////////////////////////////////////////////////////////////////////////////////////////////////
-    // Packed, layer i in bits [i*W +: W]. Unpacked arrays do not appear in the
-    // XSIM waveform window, which makes them the wrong choice for anything a
-    // person has to watch during bring-up.
-    output logic [   P_NUM_LAYERS-1:0] lay_en,
-    output logic [ 8*P_NUM_LAYERS-1:0] lay_alpha,
-    output logic [   P_NUM_LAYERS-1:0] lay_alpha_src,
-    output logic [16*P_NUM_LAYERS-1:0] lay_x,
-    output logic [16*P_NUM_LAYERS-1:0] lay_y,
-    output logic [16*P_NUM_LAYERS-1:0] lay_w,
-    output logic [16*P_NUM_LAYERS-1:0] lay_h,
+    // Packed ARRAYS with the layer as the first dimension, so lay_x[i] is
+    // layer i. Unpacked arrays do not appear in the XSIM waveform window, and
+    // a flat vector would put bit arithmetic at every use site.
+    output logic [P_NUM_LAYERS-1:0]       lay_en,
+    output logic [P_NUM_LAYERS-1:0][ 7:0] lay_alpha,
+    output logic [P_NUM_LAYERS-1:0]       lay_alpha_src,
+    output logic [P_NUM_LAYERS-1:0][15:0] lay_x,
+    output logic [P_NUM_LAYERS-1:0][15:0] lay_y,
+    output logic [P_NUM_LAYERS-1:0][15:0] lay_w,
+    output logic [P_NUM_LAYERS-1:0][15:0] lay_h,
 
-    input  logic [   P_NUM_LAYERS-1:0] lay_armed,
-    input  logic [   P_NUM_LAYERS-1:0] lay_dropped,
-    input  logic [   P_NUM_LAYERS-1:0] lay_cfg_bad,
-    input  logic [16*P_NUM_LAYERS-1:0] lay_level,
+    input  logic [P_NUM_LAYERS-1:0]       lay_armed,
+    input  logic [P_NUM_LAYERS-1:0]       lay_dropped,
+    input  logic [P_NUM_LAYERS-1:0]       lay_cfg_bad,
+    input  logic [P_NUM_LAYERS-1:0][15:0] lay_level,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Level-sensitive interrupt, the OR of (ERR & IRQ_EN)
@@ -133,32 +133,32 @@ module axis_video_mixer_csr #(
   // width; the bridge further down connects the first P_NUM_LAYERS of each to
   // the datapath and ties off the rest.
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  logic [   LP_MAP_LAYERS-1:0] map_en;
-  logic [ 8*LP_MAP_LAYERS-1:0] map_alpha;
-  logic [   LP_MAP_LAYERS-1:0] map_alpha_src;
-  logic [16*LP_MAP_LAYERS-1:0] map_x;
-  logic [16*LP_MAP_LAYERS-1:0] map_y;
-  logic [16*LP_MAP_LAYERS-1:0] map_w;
-  logic [16*LP_MAP_LAYERS-1:0] map_h;
+  logic [LP_MAP_LAYERS-1:0]       map_en;
+  logic [LP_MAP_LAYERS-1:0][ 7:0] map_alpha;
+  logic [LP_MAP_LAYERS-1:0]       map_alpha_src;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_x;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_y;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_w;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_h;
 
-  logic [   LP_MAP_LAYERS-1:0] map_armed;
-  logic [   LP_MAP_LAYERS-1:0] map_dropped;
-  logic [   LP_MAP_LAYERS-1:0] map_cfg_bad;
-  logic [16*LP_MAP_LAYERS-1:0] map_level;
+  logic [LP_MAP_LAYERS-1:0]       map_armed;
+  logic [LP_MAP_LAYERS-1:0]       map_dropped;
+  logic [LP_MAP_LAYERS-1:0]       map_cfg_bad;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_level;
   logic [LP_MAP_LAYERS-1:0] map_err_layer_set;
 
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_layer_used
     assign lay_en[gi]             = map_en[gi];
-    assign lay_alpha[8*gi+:8]     = map_alpha[8*gi+:8];
+    assign lay_alpha[gi]          = map_alpha[gi];
     assign lay_alpha_src[gi]      = map_alpha_src[gi];
-    assign lay_x[16*gi+:16]       = map_x[16*gi+:16];
-    assign lay_y[16*gi+:16]       = map_y[16*gi+:16];
-    assign lay_w[16*gi+:16]       = map_w[16*gi+:16];
-    assign lay_h[16*gi+:16]       = map_h[16*gi+:16];
+    assign lay_x[gi]              = map_x[gi];
+    assign lay_y[gi]              = map_y[gi];
+    assign lay_w[gi]              = map_w[gi];
+    assign lay_h[gi]              = map_h[gi];
     assign map_armed[gi]          = lay_armed[gi];
     assign map_dropped[gi]        = lay_dropped[gi];
     assign map_cfg_bad[gi]        = lay_cfg_bad[gi];
-    assign map_level[16*gi+:16]   = lay_level[16*gi+:16];
+    assign map_level[gi]          = lay_level[gi];
     assign map_err_layer_set[gi]  = err_layer_set[gi];
   end
 
@@ -171,7 +171,7 @@ module axis_video_mixer_csr #(
     assign map_armed[gi]         = 1'b0;
     assign map_dropped[gi]       = 1'b0;
     assign map_cfg_bad[gi]       = 1'b0;
-    assign map_level[16*gi+:16]  = 16'd0;
+    assign map_level[gi]         = 16'd0;
     assign map_err_layer_set[gi] = 1'b0;
   end
 
@@ -304,93 +304,93 @@ module axis_video_mixer_csr #(
       .csr_err_layer_l6_set        (map_err_layer_set[6]),
       .csr_err_layer_l7_set        (map_err_layer_set[7]),
       .csr_l0_ctrl_en_out          (map_en[0]),
-      .csr_l0_ctrl_alpha_out       (map_alpha[8*0+:8]),
+      .csr_l0_ctrl_alpha_out       (map_alpha[0]),
       .csr_l0_ctrl_alpha_src_out   (map_alpha_src[0]),
-      .csr_l0_pos_x_out            (map_x[16*0+:16]),
-      .csr_l0_pos_y_out            (map_y[16*0+:16]),
-      .csr_l0_size_width_out       (map_w[16*0+:16]),
-      .csr_l0_size_height_out      (map_h[16*0+:16]),
+      .csr_l0_pos_x_out            (map_x[0]),
+      .csr_l0_pos_y_out            (map_y[0]),
+      .csr_l0_size_width_out       (map_w[0]),
+      .csr_l0_size_height_out      (map_h[0]),
       .csr_l0_status_armed_in      (map_armed[0]),
       .csr_l0_status_dropped_in    (map_dropped[0]),
       .csr_l0_status_cfg_bad_in    (map_cfg_bad[0]),
-      .csr_l0_status_fifo_level_in (map_level[16*0+:16]),
+      .csr_l0_status_fifo_level_in (map_level[0]),
       .csr_l1_ctrl_en_out          (map_en[1]),
-      .csr_l1_ctrl_alpha_out       (map_alpha[8*1+:8]),
+      .csr_l1_ctrl_alpha_out       (map_alpha[1]),
       .csr_l1_ctrl_alpha_src_out   (map_alpha_src[1]),
-      .csr_l1_pos_x_out            (map_x[16*1+:16]),
-      .csr_l1_pos_y_out            (map_y[16*1+:16]),
-      .csr_l1_size_width_out       (map_w[16*1+:16]),
-      .csr_l1_size_height_out      (map_h[16*1+:16]),
+      .csr_l1_pos_x_out            (map_x[1]),
+      .csr_l1_pos_y_out            (map_y[1]),
+      .csr_l1_size_width_out       (map_w[1]),
+      .csr_l1_size_height_out      (map_h[1]),
       .csr_l1_status_armed_in      (map_armed[1]),
       .csr_l1_status_dropped_in    (map_dropped[1]),
       .csr_l1_status_cfg_bad_in    (map_cfg_bad[1]),
-      .csr_l1_status_fifo_level_in (map_level[16*1+:16]),
+      .csr_l1_status_fifo_level_in (map_level[1]),
       .csr_l2_ctrl_en_out          (map_en[2]),
-      .csr_l2_ctrl_alpha_out       (map_alpha[8*2+:8]),
+      .csr_l2_ctrl_alpha_out       (map_alpha[2]),
       .csr_l2_ctrl_alpha_src_out   (map_alpha_src[2]),
-      .csr_l2_pos_x_out            (map_x[16*2+:16]),
-      .csr_l2_pos_y_out            (map_y[16*2+:16]),
-      .csr_l2_size_width_out       (map_w[16*2+:16]),
-      .csr_l2_size_height_out      (map_h[16*2+:16]),
+      .csr_l2_pos_x_out            (map_x[2]),
+      .csr_l2_pos_y_out            (map_y[2]),
+      .csr_l2_size_width_out       (map_w[2]),
+      .csr_l2_size_height_out      (map_h[2]),
       .csr_l2_status_armed_in      (map_armed[2]),
       .csr_l2_status_dropped_in    (map_dropped[2]),
       .csr_l2_status_cfg_bad_in    (map_cfg_bad[2]),
-      .csr_l2_status_fifo_level_in (map_level[16*2+:16]),
+      .csr_l2_status_fifo_level_in (map_level[2]),
       .csr_l3_ctrl_en_out          (map_en[3]),
-      .csr_l3_ctrl_alpha_out       (map_alpha[8*3+:8]),
+      .csr_l3_ctrl_alpha_out       (map_alpha[3]),
       .csr_l3_ctrl_alpha_src_out   (map_alpha_src[3]),
-      .csr_l3_pos_x_out            (map_x[16*3+:16]),
-      .csr_l3_pos_y_out            (map_y[16*3+:16]),
-      .csr_l3_size_width_out       (map_w[16*3+:16]),
-      .csr_l3_size_height_out      (map_h[16*3+:16]),
+      .csr_l3_pos_x_out            (map_x[3]),
+      .csr_l3_pos_y_out            (map_y[3]),
+      .csr_l3_size_width_out       (map_w[3]),
+      .csr_l3_size_height_out      (map_h[3]),
       .csr_l3_status_armed_in      (map_armed[3]),
       .csr_l3_status_dropped_in    (map_dropped[3]),
       .csr_l3_status_cfg_bad_in    (map_cfg_bad[3]),
-      .csr_l3_status_fifo_level_in (map_level[16*3+:16]),
+      .csr_l3_status_fifo_level_in (map_level[3]),
       .csr_l4_ctrl_en_out          (map_en[4]),
-      .csr_l4_ctrl_alpha_out       (map_alpha[8*4+:8]),
+      .csr_l4_ctrl_alpha_out       (map_alpha[4]),
       .csr_l4_ctrl_alpha_src_out   (map_alpha_src[4]),
-      .csr_l4_pos_x_out            (map_x[16*4+:16]),
-      .csr_l4_pos_y_out            (map_y[16*4+:16]),
-      .csr_l4_size_width_out       (map_w[16*4+:16]),
-      .csr_l4_size_height_out      (map_h[16*4+:16]),
+      .csr_l4_pos_x_out            (map_x[4]),
+      .csr_l4_pos_y_out            (map_y[4]),
+      .csr_l4_size_width_out       (map_w[4]),
+      .csr_l4_size_height_out      (map_h[4]),
       .csr_l4_status_armed_in      (map_armed[4]),
       .csr_l4_status_dropped_in    (map_dropped[4]),
       .csr_l4_status_cfg_bad_in    (map_cfg_bad[4]),
-      .csr_l4_status_fifo_level_in (map_level[16*4+:16]),
+      .csr_l4_status_fifo_level_in (map_level[4]),
       .csr_l5_ctrl_en_out          (map_en[5]),
-      .csr_l5_ctrl_alpha_out       (map_alpha[8*5+:8]),
+      .csr_l5_ctrl_alpha_out       (map_alpha[5]),
       .csr_l5_ctrl_alpha_src_out   (map_alpha_src[5]),
-      .csr_l5_pos_x_out            (map_x[16*5+:16]),
-      .csr_l5_pos_y_out            (map_y[16*5+:16]),
-      .csr_l5_size_width_out       (map_w[16*5+:16]),
-      .csr_l5_size_height_out      (map_h[16*5+:16]),
+      .csr_l5_pos_x_out            (map_x[5]),
+      .csr_l5_pos_y_out            (map_y[5]),
+      .csr_l5_size_width_out       (map_w[5]),
+      .csr_l5_size_height_out      (map_h[5]),
       .csr_l5_status_armed_in      (map_armed[5]),
       .csr_l5_status_dropped_in    (map_dropped[5]),
       .csr_l5_status_cfg_bad_in    (map_cfg_bad[5]),
-      .csr_l5_status_fifo_level_in (map_level[16*5+:16]),
+      .csr_l5_status_fifo_level_in (map_level[5]),
       .csr_l6_ctrl_en_out          (map_en[6]),
-      .csr_l6_ctrl_alpha_out       (map_alpha[8*6+:8]),
+      .csr_l6_ctrl_alpha_out       (map_alpha[6]),
       .csr_l6_ctrl_alpha_src_out   (map_alpha_src[6]),
-      .csr_l6_pos_x_out            (map_x[16*6+:16]),
-      .csr_l6_pos_y_out            (map_y[16*6+:16]),
-      .csr_l6_size_width_out       (map_w[16*6+:16]),
-      .csr_l6_size_height_out      (map_h[16*6+:16]),
+      .csr_l6_pos_x_out            (map_x[6]),
+      .csr_l6_pos_y_out            (map_y[6]),
+      .csr_l6_size_width_out       (map_w[6]),
+      .csr_l6_size_height_out      (map_h[6]),
       .csr_l6_status_armed_in      (map_armed[6]),
       .csr_l6_status_dropped_in    (map_dropped[6]),
       .csr_l6_status_cfg_bad_in    (map_cfg_bad[6]),
-      .csr_l6_status_fifo_level_in (map_level[16*6+:16]),
+      .csr_l6_status_fifo_level_in (map_level[6]),
       .csr_l7_ctrl_en_out          (map_en[7]),
-      .csr_l7_ctrl_alpha_out       (map_alpha[8*7+:8]),
+      .csr_l7_ctrl_alpha_out       (map_alpha[7]),
       .csr_l7_ctrl_alpha_src_out   (map_alpha_src[7]),
-      .csr_l7_pos_x_out            (map_x[16*7+:16]),
-      .csr_l7_pos_y_out            (map_y[16*7+:16]),
-      .csr_l7_size_width_out       (map_w[16*7+:16]),
-      .csr_l7_size_height_out      (map_h[16*7+:16]),
+      .csr_l7_pos_x_out            (map_x[7]),
+      .csr_l7_pos_y_out            (map_y[7]),
+      .csr_l7_size_width_out       (map_w[7]),
+      .csr_l7_size_height_out      (map_h[7]),
       .csr_l7_status_armed_in      (map_armed[7]),
       .csr_l7_status_dropped_in    (map_dropped[7]),
       .csr_l7_status_cfg_bad_in    (map_cfg_bad[7]),
-      .csr_l7_status_fifo_level_in (map_level[16*7+:16]),
+      .csr_l7_status_fifo_level_in (map_level[7]),
       .axil_awaddr                 (axil_awaddr),
       .axil_awprot                 (axil_awprot),
       .axil_awvalid                (axil_awvalid),

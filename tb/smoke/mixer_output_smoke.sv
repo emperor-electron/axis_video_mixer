@@ -53,9 +53,9 @@ module mixer_output_smoke #(
   logic [23:0] background_rgb = BG;
   logic [31:0] stall_limit = 0;
   logic [NL-1:0] lay_en = 0;
-  logic [8*NL-1:0] lay_alpha;
+  logic [NL-1:0][7:0] lay_alpha;
   logic [NL-1:0] lay_alpha_src = 0;
-  logic [16*NL-1:0] lay_x, lay_y, lay_w, lay_h;
+  logic [NL-1:0][15:0] lay_x, lay_y, lay_w, lay_h;
 
   // status
   logic status_frame_active, status_sync_wait;
@@ -63,11 +63,11 @@ module mixer_output_smoke #(
   logic err_cfg_set, err_starve_set, err_geom_set, err_src_stall_set, err_out_stall_set;
   logic err_sync_to_set;
   logic [NL-1:0] err_layer_set, lay_armed, lay_dropped, lay_cfg_bad;
-  logic [16*NL-1:0] lay_level;
+  logic [NL-1:0][15:0] lay_level;
 
   // streams
   logic [NL-1:0] s_tvalid, s_tready, s_tuser, s_tlast;
-  logic [32*NL-1:0] s_tdata;
+  logic [NL-1:0][31:0] s_tdata;
   logic m_tvalid, m_tready, m_tuser, m_tlast;
   logic [31:0] m_tdata;
 
@@ -118,7 +118,7 @@ module mixer_output_smoke #(
 
   task automatic drive_beat(logic [31:0] d, logic u, logic l);
     @(negedge clk);
-    s_tdata[32*0+:32] = d; s_tuser[0] = u; s_tlast[0] = l; s_tvalid[0] = 1'b1;
+    s_tdata[0] = d; s_tuser[0] = u; s_tlast[0] = l; s_tvalid[0] = 1'b1;
     do @(posedge clk); while (!s_tready[0]);
     if (src_gap > 0) begin
       @(negedge clk);
@@ -129,8 +129,8 @@ module mixer_output_smoke #(
 
   task automatic drive_frame(int fno);
     int lw, lh;
-    lw = (lay_w[16*0+:16] == 0) ? W : int'(lay_w[16*0+:16]);   // follow the layer, not the canvas
-    lh = (lay_h[16*0+:16] == 0) ? H : int'(lay_h[16*0+:16]);
+    lw = (lay_w[0] == 0) ? W : int'(lay_w[0]);   // follow the layer, not the canvas
+    lh = (lay_h[0] == 0) ? H : int'(lay_h[0]);
     for (int y = 0; y < lh; y++)
       for (int x = 0; x < lw; x++)
         drive_beat({8'(16*(y+1)), 8'(16*(x+1)), 8'hC0, src_alpha_zero ? 8'h00 : 8'hFF},
@@ -140,7 +140,7 @@ module mixer_output_smoke #(
   endtask
 
   initial begin
-    s_tvalid[0] = 0; s_tuser[0] = 0; s_tlast[0] = 0; s_tdata[32*0+:32] = 0;
+    s_tvalid[0] = 0; s_tuser[0] = 0; s_tlast[0] = 0; s_tdata[0] = 0;
     forever begin
       if (src_run) drive_frame(src_frames); else @(posedge clk);
     end
@@ -162,9 +162,9 @@ module mixer_output_smoke #(
     cfg_sync = 0; cfg_timeout = 0;
     src_gap = 0; src_alpha_zero = 0; src_frame_tlast = 0; src_frames = 0;
     n_beats = 0; n_nonbg = 0; n_frames = 0;
-    lay_alpha[8*0+:8] = 8'hFF; lay_alpha_src = 0;
-    lay_x[16*0+:16] = 0; lay_y[16*0+:16] = 0;
-    lay_w[16*0+:16] = W; lay_h[16*0+:16] = H;
+    lay_alpha[0] = 8'hFF; lay_alpha_src = 0;
+    lay_x[0] = 0; lay_y[0] = 0;
+    lay_w[0] = W; lay_h[0] = H;
     repeat (5) @(posedge clk);
   endtask
 
@@ -183,7 +183,7 @@ module mixer_output_smoke #(
     ctrl_en = 1;
     repeat (cycles) @(posedge clk);
     $display("%-28s beats=%4d nonbg=%4d frames=%2d | armed=%b lvl=%2d syncwait=%b | ERR cfg=%b starve=%b geom=%b syncto=%b | srcf=%0d",
-             s, n_beats, n_nonbg, n_frames, lay_armed[0], lay_level[16*0+:16], status_sync_wait,
+             s, n_beats, n_nonbg, n_frames, lay_armed[0], lay_level[0], status_sync_wait,
              e_cfg, e_starve, e_geom, e_syncto, src_frames);
   endtask
 
@@ -197,7 +197,7 @@ module mixer_output_smoke #(
     reset_all(); lay_en = 1; src_alpha_zero = 1; run("2 pixel-alpha-zero", 3000);
 
     // 3. EN set but SIZE never written (reset value)
-    reset_all(); lay_en = 1; lay_w[16*0+:16] = 0; lay_h[16*0+:16] = 0; run("3 size-zero", 3000);
+    reset_all(); lay_en = 1; lay_w[0] = 0; lay_h[0] = 0; run("3 size-zero", 3000);
 
     // 4. TLAST once per frame instead of per line
     reset_all(); lay_en = 1; src_frame_tlast = 1; run("4 tlast-per-frame", 3000);
@@ -209,15 +209,15 @@ module mixer_output_smoke #(
     reset_all(); lay_en = 0; run("6 layer-not-enabled", 3000);
 
     // 7. window off the canvas (x+w > width)
-    reset_all(); lay_en = 1; lay_x[16*0+:16] = 4; lay_w[16*0+:16] = 8; run("7 window-overhangs", 3000);
+    reset_all(); lay_en = 1; lay_x[0] = 4; lay_w[0] = 8; run("7 window-overhangs", 3000);
 
     $display("--- soft start ---");
 
     // 8/9. window at the canvas origin, half the canvas width, source at
     //      exactly the rate the window needs. No slack at beat zero.
-    reset_all(); lay_en = 1; lay_w[16*0+:16] = 4; src_gap = 1;
+    reset_all(); lay_en = 1; lay_w[0] = 4; src_gap = 1;
     run("8  half-width gap1 sync=0", 4000);
-    reset_all(); lay_en = 1; lay_w[16*0+:16] = 4; src_gap = 1; cfg_sync = 1;
+    reset_all(); lay_en = 1; lay_w[0] = 4; src_gap = 1; cfg_sync = 1;
     run("9  half-width gap1 sync=1", 4000);
 
     // 10. an enabled layer whose source never comes up, waiting indefinitely
@@ -225,7 +225,7 @@ module mixer_output_smoke #(
     ctrl_en = 1; src_run = 0;
     repeat (8000) @(posedge clk);
     $display("10 dead-source sync=1 to=0   beats=%4d nonbg=%4d frames=%2d | armed=%b lvl=%2d syncwait=%b | ERR cfg=%b starve=%b geom=%b syncto=%b | tvalid_ever=%b",
-             n_beats, n_nonbg, n_frames, lay_armed[0], lay_level[16*0+:16], status_sync_wait,
+             n_beats, n_nonbg, n_frames, lay_armed[0], lay_level[0], status_sync_wait,
              e_cfg, e_starve, e_geom, e_syncto, tvalid_ever);
 
     // 11. the same, with the wait bounded
@@ -237,7 +237,7 @@ module mixer_output_smoke #(
     reset_all(); lay_en = 1; cfg_sync = 1; run("12 correct sync=1", 4000);
 
     // 13. a layer that is enabled but off the visible area still gates
-    reset_all(); lay_en = 1; src_gap = 1; lay_x[16*0+:16] = 4; lay_w[16*0+:16] = 4;
+    reset_all(); lay_en = 1; src_gap = 1; lay_x[0] = 4; lay_w[0] = 4;
     cfg_sync = 1; run("13 offset-window sync=1", 4000);
 
     // 14. no layer enabled at all: nothing to wait for, so the gate must not
@@ -247,7 +247,7 @@ module mixer_output_smoke #(
     // 15. a layer enabled with an illegal window. want_en is false for it, so
     //     it is not in act_en and must not hold the gate -- otherwise one bad
     //     SIZE register blacks the output out instead of latching ERR.CFG.
-    reset_all(); lay_en = 1; lay_w[16*0+:16] = 0; lay_h[16*0+:16] = 0; cfg_sync = 1;
+    reset_all(); lay_en = 1; lay_w[0] = 0; lay_h[0] = 0; cfg_sync = 1;
     run("15 cfg-bad sync=1", 2000);
 
     $finish;

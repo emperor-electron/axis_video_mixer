@@ -73,15 +73,15 @@ module fv_core_props #(
     input logic [            15:0] act_h,
     input logic [            15:0] act_bw,
     input logic [P_NUM_LAYERS-1:0] act_en,
-    // Packed, matching the RTL: layer i in bits [i*W +: W].
-    input logic [16*P_NUM_LAYERS-1:0] act_x,
-    input logic [16*P_NUM_LAYERS-1:0] act_y,
-    input logic [16*P_NUM_LAYERS-1:0] act_w_l,
-    input logic [16*P_NUM_LAYERS-1:0] act_bx,
-    input logic [17*P_NUM_LAYERS-1:0] act_bxe,
-    input logic [17*P_NUM_LAYERS-1:0] act_ye,
-    input logic [16*P_NUM_LAYERS-1:0] act_bw_l,
-    input logic [16*P_NUM_LAYERS-1:0] act_h_l,
+    // Packed arrays, matching the RTL: layer first, so act_x[i] is layer i.
+    input logic [P_NUM_LAYERS-1:0][15:0] act_x,
+    input logic [P_NUM_LAYERS-1:0][15:0] act_y,
+    input logic [P_NUM_LAYERS-1:0][15:0] act_w_l,
+    input logic [P_NUM_LAYERS-1:0][15:0] act_bx,
+    input logic [P_NUM_LAYERS-1:0][16:0] act_bxe,
+    input logic [P_NUM_LAYERS-1:0][16:0] act_ye,
+    input logic [P_NUM_LAYERS-1:0][15:0] act_bw_l,
+    input logic [P_NUM_LAYERS-1:0][15:0] act_h_l,
 
     // Shadow validation.
     input logic                    canvas_ok,
@@ -128,8 +128,8 @@ module fv_core_props #(
   logic s0_valid_d, s0_eol_d, s0_eof_d, pipe_en_d;
   logic rst_n_d, soft_rst_d, ctrl_en_d, frame_latch_d;
   logic [P_NUM_LAYERS-1:0] lay_active_d, lay_dropped_d, starve_d, lay_flush_d;
-  logic [16*P_NUM_LAYERS-1:0] act_bw_l_d;
-  logic [16*P_NUM_LAYERS-1:0] act_h_l_d;
+  logic [P_NUM_LAYERS-1:0][15:0] act_bw_l_d;
+  logic [P_NUM_LAYERS-1:0][15:0] act_h_l_d;
   logic mstall_d;
   logic [31:0] frame_count_d;
   logic [31:0] stall_limit_d;
@@ -161,8 +161,8 @@ module fv_core_props #(
     eof_out_d             <= eof_out;
     out_beat_d            <= out_beat;
     for (int i = 0; i < P_NUM_LAYERS; i++) begin
-      act_bw_l_d[16*i+:16] <= act_bw_l[16*i+:16];
-      act_h_l_d[16*i+:16]  <= act_h_l[16*i+:16];
+      act_bw_l_d[i] <= act_bw_l[i];
+      act_h_l_d[i]  <= act_h_l[i];
     end
   end
 
@@ -318,10 +318,10 @@ module fv_core_props #(
       // that, because k-induction gets to assume every asserted property in
       // the pre-states.
       if (rst_n) begin
-        a_bw_shift_consistent : assert (act_bw_l[16*gi+:16] == (act_w_l[16*gi+:16] >> $clog2(P_PPC)));
-        a_bx_shift_consistent : assert (act_bx[16*gi+:16] == (act_x[16*gi+:16] >> $clog2(P_PPC)));
-        a_bxe_consistent : assert (act_bxe[17*gi+:17] == (17'(act_bx[16*gi+:16]) + 17'(act_bw_l[16*gi+:16])));
-        a_ye_consistent : assert (act_ye[17*gi+:17] == (17'(act_y[16*gi+:16]) + 17'(act_h_l[16*gi+:16])));
+        a_bw_shift_consistent : assert (act_bw_l[gi] == (act_w_l[gi] >> $clog2(P_PPC)));
+        a_bx_shift_consistent : assert (act_bx[gi] == (act_x[gi] >> $clog2(P_PPC)));
+        a_bxe_consistent : assert (act_bxe[gi] == (17'(act_bx[gi]) + 17'(act_bw_l[gi])));
+        a_ye_consistent : assert (act_ye[gi] == (17'(act_y[gi]) + 17'(act_h_l[gi])));
       end
 
       if (rst_n && act_en[gi]) begin
@@ -331,28 +331,28 @@ module fv_core_props #(
 
         // Inside the canvas, in both axes, in the units each axis is compared
         // in: beats horizontally, lines vertically.
-        a_active_window_in_canvas : assert ((act_bxe[17*gi+:17] <= 17'(act_bw)) &&
-                                            (act_ye[17*gi+:17] <= 17'(act_h)));
+        a_active_window_in_canvas : assert ((act_bxe[gi] <= 17'(act_bw)) &&
+                                            (act_ye[gi] <= 17'(act_h)));
 
         // Non-degenerate. A zero-width or zero-height window would make
         // in_win false everywhere, so the layer would arm, never be popped,
         // and fill its FIFO until its source stalled.
-        a_active_window_nonzero : assert ((act_bw_l[16*gi+:16] >= 16'd1) &&
-                                          (act_h_l[16*gi+:16] >= 16'd1));
+        a_active_window_nonzero : assert ((act_bw_l[gi] >= 16'd1) &&
+                                          (act_h_l[gi] >= 16'd1));
 
         // Beat aligned. This is the constraint that makes one compare per
         // layer per beat sound, and rejecting rather than rounding is
         // deliberate -- silently snapping a window to a beat boundary would
         // put the picture up to P_PPC-1 pixels from where the register says.
-        a_active_x_aligned : assert ((act_x[16*gi+:16] & LP_PPC_MASK) == 16'd0);
-        a_active_w_aligned : assert ((act_w_l[16*gi+:16] & LP_PPC_MASK) == 16'd0);
+        a_active_x_aligned : assert ((act_x[gi] & LP_PPC_MASK) == 16'd0);
+        a_active_w_aligned : assert ((act_w_l[gi] & LP_PPC_MASK) == 16'd0);
 
         // The shift to the beat domain lost nothing, which is only true
         // because of the alignment above -- and it is what makes act_bx and
         // act_bw_l faithful to what software asked for rather than to a
         // rounded-down version of it.
-        a_active_bx_exact : assert ((act_bx[16*gi+:16] << $clog2(P_PPC)) == act_x[16*gi+:16]);
-        a_active_bw_exact : assert ((act_bw_l[16*gi+:16] << $clog2(P_PPC)) == act_w_l[16*gi+:16]);
+        a_active_bx_exact : assert ((act_bx[gi] << $clog2(P_PPC)) == act_x[gi]);
+        a_active_bw_exact : assert ((act_bw_l[gi] << $clog2(P_PPC)) == act_w_l[gi]);
       end
 
       // A layer is only ever popped inside its own window, and only while it
@@ -465,7 +465,7 @@ module fv_core_props #(
         // layer actually sees -- cfg_w_beats and cfg_height -- rather than over
         // geo_changed, because geo_changed is the core's own reasoning and this
         // has to be true of the wires.
-        if ((act_bw_l[16*gi+:16] != act_bw_l_d[16*gi+:16]) || (act_h_l[16*gi+:16] != act_h_l_d[16*gi+:16])) begin
+        if ((act_bw_l[gi] != act_bw_l_d[gi]) || (act_h_l[gi] != act_h_l_d[gi])) begin
           a_geom_change_flushes : assert (lay_flush_d[gi]);
         end
       end
@@ -475,7 +475,7 @@ module fv_core_props #(
       // assumes. A disabled layer is held in flush, so a zero there is
       // harmless.
       if (rst_n && act_en[gi]) begin
-        a_geom_nonzero : assert ((act_bw_l[16*gi+:16] != 16'd0) && (act_h_l[16*gi+:16] != 16'd0));
+        a_geom_nonzero : assert ((act_bw_l[gi] != 16'd0) && (act_h_l[gi] != 16'd0));
       end
     end
   end

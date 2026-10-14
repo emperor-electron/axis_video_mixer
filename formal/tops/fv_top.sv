@@ -262,7 +262,7 @@ module fv_top
   logic [MAX_LAYERS-1:0] fv_tuser;
   logic [MAX_LAYERS-1:0] fv_tlast;
   logic [MAX_LAYERS-1:0] fv_tready;
-  logic [P_BEAT_W*MAX_LAYERS-1:0] fv_tdata;
+  logic [MAX_LAYERS-1:0][P_BEAT_W-1:0] fv_tdata;
 
   assign fv_tvalid = {
     s_axis7_tvalid,
@@ -308,21 +308,20 @@ module fv_top
     s_axis0_tready
   };
 
-  assign fv_tdata[P_BEAT_W*0+:P_BEAT_W] = s_axis0_tdata;
-  assign fv_tdata[P_BEAT_W*1+:P_BEAT_W] = s_axis1_tdata;
-  assign fv_tdata[P_BEAT_W*2+:P_BEAT_W] = s_axis2_tdata;
-  assign fv_tdata[P_BEAT_W*3+:P_BEAT_W] = s_axis3_tdata;
-  assign fv_tdata[P_BEAT_W*4+:P_BEAT_W] = s_axis4_tdata;
-  assign fv_tdata[P_BEAT_W*5+:P_BEAT_W] = s_axis5_tdata;
-  assign fv_tdata[P_BEAT_W*6+:P_BEAT_W] = s_axis6_tdata;
-  assign fv_tdata[P_BEAT_W*7+:P_BEAT_W] = s_axis7_tdata;
+  assign fv_tdata[0] = s_axis0_tdata;
+  assign fv_tdata[1] = s_axis1_tdata;
+  assign fv_tdata[2] = s_axis2_tdata;
+  assign fv_tdata[3] = s_axis3_tdata;
+  assign fv_tdata[4] = s_axis4_tdata;
+  assign fv_tdata[5] = s_axis5_tdata;
+  assign fv_tdata[6] = s_axis6_tdata;
+  assign fv_tdata[7] = s_axis7_tdata;
 
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_wire
     always_ff @(posedge clk) begin
       if (rst_n) begin
         a_wire_tvalid : assert (dut.u_core.s_axis_tvalid[gi] == fv_tvalid[gi]);
-        a_wire_tdata : assert (dut.u_core.s_axis_tdata[P_BEAT_W*gi+:P_BEAT_W] ==
-                             fv_tdata[P_BEAT_W*gi+:P_BEAT_W]);
+        a_wire_tdata : assert (dut.u_core.s_axis_tdata[gi] == fv_tdata[gi]);
         a_wire_tuser : assert (dut.u_core.s_axis_tuser[gi] == fv_tuser[gi]);
         a_wire_tlast : assert (dut.u_core.s_axis_tlast[gi] == fv_tlast[gi]);
         a_wire_tready : assert (fv_tready[gi] == dut.u_core.s_axis_tready[gi]);

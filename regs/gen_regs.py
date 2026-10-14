@@ -473,21 +473,21 @@ module axis_video_mixer_csr #(
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Per-layer configuration out, status in
     ////////////////////////////////////////////////////////////////////////////////////////////////
-    // Packed, layer i in bits [i*W +: W]. Unpacked arrays do not appear in the
-    // XSIM waveform window, which makes them the wrong choice for anything a
-    // person has to watch during bring-up.
-    output logic [   P_NUM_LAYERS-1:0] lay_en,
-    output logic [ 8*P_NUM_LAYERS-1:0] lay_alpha,
-    output logic [   P_NUM_LAYERS-1:0] lay_alpha_src,
-    output logic [16*P_NUM_LAYERS-1:0] lay_x,
-    output logic [16*P_NUM_LAYERS-1:0] lay_y,
-    output logic [16*P_NUM_LAYERS-1:0] lay_w,
-    output logic [16*P_NUM_LAYERS-1:0] lay_h,
+    // Packed ARRAYS with the layer as the first dimension, so lay_x[i] is
+    // layer i. Unpacked arrays do not appear in the XSIM waveform window, and
+    // a flat vector would put bit arithmetic at every use site.
+    output logic [P_NUM_LAYERS-1:0]       lay_en,
+    output logic [P_NUM_LAYERS-1:0][ 7:0] lay_alpha,
+    output logic [P_NUM_LAYERS-1:0]       lay_alpha_src,
+    output logic [P_NUM_LAYERS-1:0][15:0] lay_x,
+    output logic [P_NUM_LAYERS-1:0][15:0] lay_y,
+    output logic [P_NUM_LAYERS-1:0][15:0] lay_w,
+    output logic [P_NUM_LAYERS-1:0][15:0] lay_h,
 
-    input  logic [   P_NUM_LAYERS-1:0] lay_armed,
-    input  logic [   P_NUM_LAYERS-1:0] lay_dropped,
-    input  logic [   P_NUM_LAYERS-1:0] lay_cfg_bad,
-    input  logic [16*P_NUM_LAYERS-1:0] lay_level,
+    input  logic [P_NUM_LAYERS-1:0]       lay_armed,
+    input  logic [P_NUM_LAYERS-1:0]       lay_dropped,
+    input  logic [P_NUM_LAYERS-1:0]       lay_cfg_bad,
+    input  logic [P_NUM_LAYERS-1:0][15:0] lay_level,
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Level-sensitive interrupt, the OR of (ERR & IRQ_EN)
@@ -512,32 +512,32 @@ module axis_video_mixer_csr #(
   // width; the bridge further down connects the first P_NUM_LAYERS of each to
   // the datapath and ties off the rest.
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  logic [   LP_MAP_LAYERS-1:0] map_en;
-  logic [ 8*LP_MAP_LAYERS-1:0] map_alpha;
-  logic [   LP_MAP_LAYERS-1:0] map_alpha_src;
-  logic [16*LP_MAP_LAYERS-1:0] map_x;
-  logic [16*LP_MAP_LAYERS-1:0] map_y;
-  logic [16*LP_MAP_LAYERS-1:0] map_w;
-  logic [16*LP_MAP_LAYERS-1:0] map_h;
+  logic [LP_MAP_LAYERS-1:0]       map_en;
+  logic [LP_MAP_LAYERS-1:0][ 7:0] map_alpha;
+  logic [LP_MAP_LAYERS-1:0]       map_alpha_src;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_x;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_y;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_w;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_h;
 
-  logic [   LP_MAP_LAYERS-1:0] map_armed;
-  logic [   LP_MAP_LAYERS-1:0] map_dropped;
-  logic [   LP_MAP_LAYERS-1:0] map_cfg_bad;
-  logic [16*LP_MAP_LAYERS-1:0] map_level;
+  logic [LP_MAP_LAYERS-1:0]       map_armed;
+  logic [LP_MAP_LAYERS-1:0]       map_dropped;
+  logic [LP_MAP_LAYERS-1:0]       map_cfg_bad;
+  logic [LP_MAP_LAYERS-1:0][15:0] map_level;
   logic [LP_MAP_LAYERS-1:0] map_err_layer_set;
 
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_layer_used
     assign lay_en[gi]             = map_en[gi];
-    assign lay_alpha[8*gi+:8]     = map_alpha[8*gi+:8];
+    assign lay_alpha[gi]          = map_alpha[gi];
     assign lay_alpha_src[gi]      = map_alpha_src[gi];
-    assign lay_x[16*gi+:16]       = map_x[16*gi+:16];
-    assign lay_y[16*gi+:16]       = map_y[16*gi+:16];
-    assign lay_w[16*gi+:16]       = map_w[16*gi+:16];
-    assign lay_h[16*gi+:16]       = map_h[16*gi+:16];
+    assign lay_x[gi]              = map_x[gi];
+    assign lay_y[gi]              = map_y[gi];
+    assign lay_w[gi]              = map_w[gi];
+    assign lay_h[gi]              = map_h[gi];
     assign map_armed[gi]          = lay_armed[gi];
     assign map_dropped[gi]        = lay_dropped[gi];
     assign map_cfg_bad[gi]        = lay_cfg_bad[gi];
-    assign map_level[16*gi+:16]   = lay_level[16*gi+:16];
+    assign map_level[gi]          = lay_level[gi];
     assign map_err_layer_set[gi]  = err_layer_set[gi];
   end
 
@@ -550,7 +550,7 @@ module axis_video_mixer_csr #(
     assign map_armed[gi]         = 1'b0;
     assign map_dropped[gi]       = 1'b0;
     assign map_cfg_bad[gi]       = 1'b0;
-    assign map_level[16*gi+:16]  = 16'd0;
+    assign map_level[gi]         = 16'd0;
     assign map_err_layer_set[gi] = 1'b0;
   end
 
@@ -693,16 +693,16 @@ def emit_csr_wrapper(num_layers, path):
     for i in range(num_layers):
         conns += [
             ("csr_l%d_ctrl_en_out" % i, "map_en[%d]" % i),
-            ("csr_l%d_ctrl_alpha_out" % i, "map_alpha[8*%d+:8]" % i),
+            ("csr_l%d_ctrl_alpha_out" % i, "map_alpha[%d]" % i),
             ("csr_l%d_ctrl_alpha_src_out" % i, "map_alpha_src[%d]" % i),
-            ("csr_l%d_pos_x_out" % i, "map_x[16*%d+:16]" % i),
-            ("csr_l%d_pos_y_out" % i, "map_y[16*%d+:16]" % i),
-            ("csr_l%d_size_width_out" % i, "map_w[16*%d+:16]" % i),
-            ("csr_l%d_size_height_out" % i, "map_h[16*%d+:16]" % i),
+            ("csr_l%d_pos_x_out" % i, "map_x[%d]" % i),
+            ("csr_l%d_pos_y_out" % i, "map_y[%d]" % i),
+            ("csr_l%d_size_width_out" % i, "map_w[%d]" % i),
+            ("csr_l%d_size_height_out" % i, "map_h[%d]" % i),
             ("csr_l%d_status_armed_in" % i, "map_armed[%d]" % i),
             ("csr_l%d_status_dropped_in" % i, "map_dropped[%d]" % i),
             ("csr_l%d_status_cfg_bad_in" % i, "map_cfg_bad[%d]" % i),
-            ("csr_l%d_status_fifo_level_in" % i, "map_level[16*%d+:16]" % i),
+            ("csr_l%d_status_fifo_level_in" % i, "map_level[%d]" % i),
         ]
 
     width = max(len(p) for p, _ in conns)
