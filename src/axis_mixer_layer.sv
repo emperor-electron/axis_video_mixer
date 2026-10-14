@@ -49,6 +49,10 @@ module axis_mixer_layer
   import axis_video_mixer_pkg::*;
 #(
     parameter int P_FIFO_DEPTH = 2048,
+    // Which hard memory the line buffer lands in: "block" or "ultra". Passed
+    // straight through; see axis_mixer_fifo.sv for what it does and does not
+    // change.
+    parameter string P_RAM_STYLE = "block",
     parameter int P_PPC = 1,
     // Colour component width, 8, 10, 12 or 16. Only ever the beat width here.
     parameter int P_CH_W = 8,
@@ -247,8 +251,9 @@ module axis_mixer_layer
   // scales with the component width on top of that: the same line buffer at
   // P_CH_W = 16 is 2048 x 64, twice the block RAM.
   axis_mixer_fifo #(
-      .P_WIDTH(P_BEAT_W),
-      .P_DEPTH(P_FIFO_DEPTH)
+      .P_WIDTH    (P_BEAT_W),
+      .P_DEPTH    (P_FIFO_DEPTH),
+      .P_RAM_STYLE(P_RAM_STYLE)
   ) u_fifo (
       .clk     (clk),
       .rst_n   (rst_n),

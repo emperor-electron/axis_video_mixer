@@ -28,7 +28,16 @@ module fv_fifo #(
     // bookkeeping, not about how wide a word is, and every bit of payload is a
     // bit the solver carries through the shadow register.
     parameter int P_WIDTH = 8,
-    parameter int P_DEPTH = 8
+    parameter int P_DEPTH = 8,
+    // Which memory style the DUT is built with. Both are proved: the array is
+    // the same FIFO either way, and this is what says so rather than leaving it
+    // assumed.
+    //
+    // An int rather than the string the RTL takes, because a string -G on a
+    // yosys command line has to survive two layers of quoting and does not.
+    // The mapping to the RTL's string happens at the instantiation below,
+    // which is one place and reads fine.
+    parameter int FV_ULTRA = 0
 ) (
     input logic clk,
 
@@ -71,8 +80,9 @@ module fv_fifo #(
   logic [        15:0] level;
 
   axis_mixer_fifo #(
-      .P_WIDTH(P_WIDTH),
-      .P_DEPTH(P_DEPTH)
+      .P_WIDTH    (P_WIDTH),
+      .P_DEPTH    (P_DEPTH),
+      .P_RAM_STYLE(FV_ULTRA ? "ultra" : "block")
   ) dut (
       .clk  (clk),
       .rst_n(rst_n),
@@ -161,6 +171,19 @@ module fv_fifo #(
   logic               shadow_vld, shadow_vld_d;
   logic               read_k_d;
 
+  // The array moved into a generate branch when P_RAM_STYLE arrived, because
+  // `ram_style` needs a string literal and so each style needs its own
+  // declaration. A hierarchical path cannot be parameterised, so the peek is
+  // selected the same way the declaration is -- only the matching branch is
+  // elaborated, so only its path has to exist.
+  logic [P_WIDTH-1:0] fv_mem_word;
+
+  if (FV_ULTRA != 0) begin : g_peek_ultra
+    assign fv_mem_word = dut.g_ultra.mem[fv_k];
+  end else begin : g_peek_block
+    assign fv_mem_word = dut.g_block.mem[fv_k];
+  end
+
   always_ff @(posedge clk) begin
     // Deliberately not cleared by flush: flush resets the pointers but does
     // not erase the memory, and neither does this.
@@ -184,11 +207,23 @@ module fv_fifo #(
     // never saw written. Under BMC from reset it simply means "address k has
     // been written at least once".
     if (rst_n && shadow_vld) begin
-      a_shadow_tracks_mem : assert (shadow == dut.mem[fv_k]);
+      a_shadow_tracks_mem : assert (shadow == fv_mem_word);
     end
 
     if (fv_started && rst_n && read_k_d && shadow_vld_d) begin
       a_storage_readback : assert (rd_data == shadow_d);
+    end
+
+    // UltraRAM has no read-first mode, so the FIFO must never read and write
+    // one address in one cycle -- otherwise the collision would have to be
+    // resolved in fabric and the choice of primitive would stop being free.
+    // The argument is that a read needs rd_ptr != wr_ptr and a write needs
+    // !full, which between them exclude an equal address. Proved rather than
+    // argued, because it is the one property P_RAM_STYLE = "ultra" rests on.
+    if (rst_n) begin
+      a_no_addr_collision : assert (!((wr_en && !full) && dut.mem_rd_en &&
+                                      (dut.wr_ptr[LP_ADDR_W-1:0] ==
+                                       dut.rd_ptr[LP_ADDR_W-1:0])));
     end
 
     // The tracked word really is read back, and from an address other than

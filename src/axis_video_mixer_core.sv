@@ -78,6 +78,7 @@ module axis_video_mixer_core
 #(
     parameter int P_NUM_LAYERS = 4,
     parameter int P_FIFO_DEPTH = 2048,
+    parameter string P_RAM_STYLE = "block",
     parameter bit P_OUT_HAS_ALPHA = 1'b1,
     parameter int P_PPC = 1,
     parameter int P_CH_W = 8,
@@ -362,6 +363,7 @@ module axis_video_mixer_core
   for (genvar gi = 0; gi < P_NUM_LAYERS; gi++) begin : g_layer
     axis_mixer_layer #(
         .P_FIFO_DEPTH(P_FIFO_DEPTH),
+        .P_RAM_STYLE (P_RAM_STYLE),
         .P_PPC       (P_PPC),
         .P_CH_W      (P_CH_W)
     ) u_layer (

@@ -21,6 +21,10 @@ RTL := $(SRC)/axis_video_mixer_pkg.sv \
 # uses blocking assignments -- see the header. Original note:
 # WIDTHTRUNC is off because the scenario table assigns int literals to the
 # 16-bit geometry inputs, which is the readable way to write it.
+# RAM_STYLE picks the layer buffer's memory primitive; both must behave
+# identically, which is the point of running the scenarios under each.
+RAM_STYLE ?= block
+
 VFLAGS := --binary --timing -j 4 -DSIMULATION -Wall \
           -Wno-DECLFILENAME -Wno-WIDTHTRUNC -Wno-VARHIDDEN -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-BLKSEQ -Wno-PROCASSINIT
 
@@ -29,7 +33,7 @@ VFLAGS := --binary --timing -j 4 -DSIMULATION -Wall \
 all: run
 
 obj_dir/$(TOP): $(RTL) $(TOP).sv
-	$(VERILATOR) $(VFLAGS) --top-module $(TOP) $(RTL) $(TOP).sv -o $(TOP)
+	$(VERILATOR) $(VFLAGS) -GP_RAM_STYLE='"$(RAM_STYLE)"' --top-module $(TOP) $(RTL) $(TOP).sv -o $(TOP)
 
 run: obj_dir/$(TOP)
 	@./obj_dir/$(TOP)

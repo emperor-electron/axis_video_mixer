@@ -624,12 +624,12 @@ reject rather than draw.
 
 ## 9. Results
 
-155 assertion statements, 49 cover statements and 15 assumptions across five
-proofs and 49 tasks. Assertions inside per-layer and per-lane generate loops
+156 assertion statements, 49 cover statements and 15 assumptions across five
+proofs and 50 tasks. Assertions inside per-layer and per-lane generate loops
 are elaborated once per instance, so the checked count is higher.
 
 ```bash
-make -C formal            # everything, under four minutes from clean
+make -C formal            # everything, about three and a half minutes from clean
 make -C formal quick      # every bmc task plus the cheap blend groups, ~30 s
 make -C formal core TASKS=prove
 make -C formal blend TASKS="div16 up16"
@@ -639,14 +639,14 @@ make -C formal blend TASKS="div16 up16"
 |---|---|---|---|
 | `fv_blend` | `div` `scale` `blend` `mono` `up` `cover`, each at 8, 10, 12 and 16 bits | pass | ~5 s each |
 | `fv_blend` | `num8` `bound8` | pass | 49 s, 81 s |
-| `fv_fifo` | `bmc` `prove` `order` `cover` `depth` | pass | ~5 s |
+| `fv_fifo` | `bmc` `prove` `order` `cover` `depth` `ultra` | pass | ~5 s each |
 | `fv_layer` | `bmc` `prove` `align` `watchdog` `cover` `ppc` | pass | ~5 s |
 | `fv_core` | `bmc` `prove` `ppc` `cover` | pass | ~15 s |
 | `fv_core` | `frame` `deep` `datapath` | pass | 89 s, 239 s, 234 s |
 | `fv_top` | `bmc` `prove` `wire8` `deep` `cover` | pass | ~25 s |
 
-Under four minutes for the whole suite from clean on one machine, most of it
-the three `fv_core` outliers; `sby` runs the tasks of one file in parallel,
+About three and a half minutes for the whole suite from clean on one machine,
+most of it the three `fv_core` outliers; `sby` runs the tasks of one file in parallel,
 so a unit costs its slowest task rather than the sum. `make quick` is the
 subset worth running while editing RTL and takes just over thirty seconds —
 every `bmc` task plus the three cheap 8-bit blend groups, which between them
@@ -678,6 +678,14 @@ the same property as `datapath` at `P_CH_W = 16` and runs at depth 12 rather
 than 16 for the same reason: twelve steps was 103 s when that choice was made
 and is 239 s now that soft start has added state, while step 14 had not cleared
 after ten minutes even before it.
+
+`fv_fifo ultra` is the same invariants again with `P_RAM_STYLE = "ultra"`
+(doc/design.md §5.7). It exists because the array moved into a generate branch
+when that parameter arrived, so the two styles are no longer literally the same
+elaborated module and "they behave identically" stopped being free. The
+hierarchical peek at the array follows the branch, selected by the same
+condition. It also carries `a_no_addr_collision`, which is the property
+UltraRAM's lack of a read-first mode actually depends on.
 
 `prove` tasks are unbounded k-induction. `bmc`, `order`, `align`, `frame`,
 `datapath`, `deep`, `wire8` and `watchdog` are bounded model checking from

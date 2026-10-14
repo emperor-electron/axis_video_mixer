@@ -30,7 +30,12 @@
 //           next boundary, which is correct behaviour but not what these
 //           scenarios mean to measure.
 ///////////////////////////////////////////////////////////////////
-module mixer_output_smoke;
+module mixer_output_smoke #(
+    // Which memory primitive the layer buffers use. The scenarios below must
+    // produce identical numbers under either, which is the whole claim
+    // P_RAM_STYLE makes; `make RAM_STYLE=ultra` is the other half of it.
+    parameter string P_RAM_STYLE = "block"
+);
   import axis_video_mixer_pkg::*;
 
   localparam int NL = 1;
@@ -66,7 +71,8 @@ module mixer_output_smoke;
   logic m_tvalid, m_tready, m_tuser, m_tlast;
   logic [31:0] m_tdata;
 
-  axis_video_mixer_core #(.P_NUM_LAYERS(NL), .P_FIFO_DEPTH(64), .P_OUT_HAS_ALPHA(1'b1),
+  axis_video_mixer_core #(.P_NUM_LAYERS(NL), .P_FIFO_DEPTH(64), .P_RAM_STYLE(P_RAM_STYLE),
+                          .P_OUT_HAS_ALPHA(1'b1),
                           .P_PPC(1), .P_CH_W(8)) dut (.*,
     .s_axis_tvalid(s_tvalid), .s_axis_tready(s_tready), .s_axis_tdata(s_tdata),
     .s_axis_tuser(s_tuser), .s_axis_tlast(s_tlast),

@@ -21,13 +21,68 @@
 //           First-word fall-through matters because the consumer decides
 //           whether to pop based on whether data is there -- it cannot afford a
 //           read-latency cycle inside the blend pipeline. The prefetch register
-//           below provides that while keeping the storage in block RAM rather
-//           than in LUTs, which at 2048 x 32 bits per layer it must be.
+//           below provides that while keeping the storage in a hard memory
+//           rather than in LUTs, which at 2048 x 32 bits per layer it must be.
+//
+//           BLOCK RAM OR ULTRARAM. P_RAM_STYLE picks the primitive: "block"
+//           for RAMB18/RAMB36, "ultra" for URAM288 on UltraScale+. The code
+//           below is written to the INTERSECTION of what the two will accept,
+//           so the parameter changes the attribute and nothing else.
+//
+//           What UltraRAM requires, and where each requirement is met:
+//
+//             One clock. URAM288 is a single-clock macro -- there is no
+//             independent second clock domain on it at all. This FIFO has
+//             always been synchronous, so this is free, and it is the reason
+//             the choice is available here and would not be across a CDC.
+//
+//             A synchronous read. No asynchronous or distributed read path.
+//             Met: the read is registered into mem_dout and nothing reads the
+//             array combinationally.
+//
+//             No reset on the array. URAM has no way to clear its storage.
+//             Met: flush resets the POINTERS and nothing else -- the array
+//             keeps whatever it held, which is why flush is one cycle rather
+//             than P_DEPTH of them, and why this was already true before
+//             UltraRAM was a consideration.
+//
+//             No read-first behaviour at a colliding address. URAM does not
+//             implement read-before-write, so a read and a write to the same
+//             address in the same cycle would have to be resolved in fabric.
+//             Met structurally, and this one is worth the argument: a read
+//             needs rd_ptr != wr_ptr, so the two addresses differ unless they
+//             are exactly P_DEPTH apart, which is the full condition -- and a
+//             write while full is gated off. So the collision cannot occur.
+//             See the assertions at the bottom.
+//
+//           mem_dout carries a synchronous clear. That was the one thing worth
+//           checking, because a clear the macro cannot absorb has to be built
+//           from fabric flops beside it -- P_WIDTH of them, which at a 512-bit
+//           beat is not a rounding error. It is absorbed: synthesising this at
+//           32 x 2048 gives 25 flops either way, which is the pointers and
+//           rd_valid and nothing else, against 2 RAMB36E2 or 1 URAM288.
+//
+//           The clear is kept rather than dropped because without it rd_data
+//           holds X until the first read, and X multiplied by an alpha of zero
+//           is X rather than zero, so it would reach the blend in simulation
+//           even though the hardware would mask it.
+//
+//           WHAT IS AND IS NOT MEASURED. The cell counts above are yosys with
+//           -family xcup, which does infer URAM288 from this style. Vivado is
+//           the tool that matters and is not available here, so treat the
+//           primitive choice as verified in principle and unconfirmed on the
+//           real flow. The FIFO's BEHAVIOUR under both settings is verified
+//           properly: bit-identical in simulation and proved by fv_fifo's
+//           ultra task.
 ///////////////////////////////////////////////////////////////////
 
 module axis_mixer_fifo #(
     parameter int P_WIDTH = 32,
-    parameter int P_DEPTH = 2048  // must be a power of two
+    parameter int P_DEPTH = 2048,  // must be a power of two
+    // "block" for RAMB18/RAMB36, "ultra" for URAM288 on UltraScale+. Nothing
+    // but the synthesis attribute changes; see the header for the argument
+    // that the coding style below suits both.
+    parameter string P_RAM_STYLE = "block"
 ) (
     input logic clk,
     input logic rst_n,
@@ -54,19 +109,29 @@ module axis_mixer_fifo #(
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   localparam int LP_ADDR_W = $clog2(P_DEPTH);
 
+  // Caught here rather than silently falling through to "block", because a
+  // typo in a string parameter that quietly selects the other primitive is a
+  // resource surprise found at place and route rather than at elaboration.
+  if ((P_RAM_STYLE != "block") && (P_RAM_STYLE != "ultra")) begin : g_bad_ram_style
+    $fatal(1, "axis_mixer_fifo: P_RAM_STYLE must be \"block\" or \"ultra\", got \"%s\"",
+           P_RAM_STYLE);
+  end
+
   ////////////////////////////////////////////////////////////////////////////////////////////////////
   // Storage
   //
   // The pointers carry one bit more than the address so that full and empty are
   // distinguishable without sacrificing an entry.
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  (* ram_style = "block" *) logic [P_WIDTH-1:0] mem[P_DEPTH];
-
   logic [LP_ADDR_W:0] wr_ptr;
   logic [LP_ADDR_W:0] rd_ptr;
   logic [LP_ADDR_W:0] mem_count;
 
   logic mem_rd_en;
+  // The array's output register. It is the prefetch register: FWFT does not
+  // cost a stage on top of the memory read, it IS the memory read.
+  logic [P_WIDTH-1:0] mem_dout;
+  logic               mem_clr;
 
   assign mem_count = wr_ptr - rd_ptr;
   assign full      = (mem_count == (LP_ADDR_W + 1)'(P_DEPTH));
@@ -76,14 +141,45 @@ module axis_mixer_fifo #(
   assign level = 16'(mem_count) + 16'(rd_valid);
 
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  // Write side
+  // The array itself
+  //
+  // Two declarations rather than one, because `ram_style` takes a string
+  // LITERAL -- there is no spelling of the attribute that reads a parameter --
+  // so choosing the primitive means choosing the declaration. The bodies are
+  // deliberately character-for-character identical: if they ever diverge, the
+  // two styles stop being the same FIFO, which is the one thing this
+  // parameter must not do.
+  //
+  // Write and read live in the same process on purpose. Both Vivado and
+  // yosys-slang infer a memory more reliably when one process owns the array
+  // and its output register, and splitting them is how a 2048-deep buffer
+  // quietly becomes flops.
   ////////////////////////////////////////////////////////////////////////////////////////////////////
-  always_ff @(posedge clk) begin
-    if (wr_en && !full) begin
-      mem[wr_ptr[LP_ADDR_W-1:0]] <= wr_data;
+  assign mem_clr = !rst_n || flush;
+
+  if (P_RAM_STYLE == "ultra") begin : g_ultra
+    (* ram_style = "ultra" *) logic [P_WIDTH-1:0] mem[P_DEPTH];
+
+    always_ff @(posedge clk) begin
+      if (wr_en && !full) mem[wr_ptr[LP_ADDR_W-1:0]] <= wr_data;
+      if (mem_clr) mem_dout <= '0;
+      else if (mem_rd_en) mem_dout <= mem[rd_ptr[LP_ADDR_W-1:0]];
+    end
+  end else begin : g_block
+    (* ram_style = "block" *) logic [P_WIDTH-1:0] mem[P_DEPTH];
+
+    always_ff @(posedge clk) begin
+      if (wr_en && !full) mem[wr_ptr[LP_ADDR_W-1:0]] <= wr_data;
+      if (mem_clr) mem_dout <= '0;
+      else if (mem_rd_en) mem_dout <= mem[rd_ptr[LP_ADDR_W-1:0]];
     end
   end
 
+  assign rd_data = mem_dout;
+
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Write pointer
+  ////////////////////////////////////////////////////////////////////////////////////////////////////
   always_ff @(posedge clk) begin
     if (!rst_n || flush) begin
       wr_ptr <= '0;
@@ -105,10 +201,8 @@ module axis_mixer_fifo #(
     if (!rst_n || flush) begin
       rd_ptr   <= '0;
       rd_valid <= 1'b0;
-      rd_data  <= '0;
     end else begin
       if (mem_rd_en) begin
-        rd_data  <= mem[rd_ptr[LP_ADDR_W-1:0]];
         rd_ptr   <= rd_ptr + 1'b1;
         rd_valid <= 1'b1;
       end else if (rd_en) begin
@@ -142,6 +236,15 @@ module axis_mixer_fifo #(
       // that gating is broken. The write is dropped either way.
       if (wr_en && full) begin
         $error("RTL-ASSERT axis_mixer_fifo: write attempted while full, pixel dropped");
+      end
+      // UltraRAM has no read-first mode, so a read and a write to one address
+      // in one cycle would have to be resolved outside the macro. The header
+      // argues it cannot happen; this is that argument made checkable, and
+      // fv_fifo proves it outright.
+      if ((wr_en && !full) && mem_rd_en &&
+          (wr_ptr[LP_ADDR_W-1:0] == rd_ptr[LP_ADDR_W-1:0])) begin
+        $error({"RTL-ASSERT axis_mixer_fifo: same-address read and write in one cycle, ",
+                "which UltraRAM cannot resolve"});
       end
     end
   end

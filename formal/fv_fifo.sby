@@ -14,6 +14,10 @@
 #           environment
 #   depth   the invariants again at P_DEPTH 64, to catch anything that was
 #           accidentally specific to a 3-bit address
+#   ultra   the invariants again with P_RAM_STYLE = "ultra". The array moves to
+#           a different generate branch and the hierarchical peek follows it,
+#           so this is the task that says the two styles really are the same
+#           FIFO rather than leaving it asserted in a comment.
 #
 # The proof result is the prove task. bmc is there because it fails fast and
 # produces a readable trace, which is what you want while a property is still
@@ -26,6 +30,7 @@ prove
 order
 cover
 depth
+ultra
 
 [options]
 bmc:   mode bmc
@@ -38,6 +43,8 @@ cover: mode cover
 cover: depth 24
 depth: mode prove
 depth: depth 12
+ultra: mode prove
+ultra: depth 12
 
 [engines]
 smtbmc boolector
@@ -48,6 +55,7 @@ depth: read_slang --top fv_fifo -G P_DEPTH=64 axis_mixer_fifo.sv fv_fifo_props.s
 order: read_slang --top fv_fifo -G P_DEPTH=4 axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo_order.sv fv_fifo_order_bind.sv fv_fifo.sv
 bmc:   read_slang --top fv_fifo axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo.sv
 prove: read_slang --top fv_fifo axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo.sv
+ultra: read_slang --top fv_fifo -G FV_ULTRA=1 axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo.sv
 cover: read_slang --top fv_fifo axis_mixer_fifo.sv fv_fifo_props.sv fv_fifo_bind.sv fv_fifo_order.sv fv_fifo_order_bind.sv fv_fifo.sv
 prep -top fv_fifo
 

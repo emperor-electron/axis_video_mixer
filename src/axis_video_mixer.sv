@@ -85,6 +85,20 @@ module axis_video_mixer
     // gets no head start within the line, so a full line has to be buffered
     // before that line begins.
     parameter int P_FIFO_DEPTH = 2048,
+    // Which hard memory each layer's buffer lands in.
+    //
+    //   "block"  RAMB18/RAMB36. Available on every Xilinx family this targets,
+    //            and the right default.
+    //   "ultra"  URAM288, UltraScale+ and later only. One clock, no array
+    //            reset, no read-first -- all of which this FIFO already
+    //            satisfied; see axis_mixer_fifo.sv for the argument.
+    //
+    // This is a resource trade, not a functional one, and it is the integrator's
+    // to make: a URAM288 is 4096 x 72, so a 2048 x 32 layer buffer uses a
+    // quarter of one and would have used two RAMB36. It pays when the buffers
+    // are deep or wide enough to use the shape -- 4K lines, P_PPC = 8, deep
+    // colour -- or when block RAM is spent on something else.
+    parameter string P_RAM_STYLE = "block",
     // 1: the output carries RGBA with alpha forced to full scale, and two
     //    mixers can be cascaded. 0: RGB only, which drops straight into a video
     //    output stage without an adapter.
@@ -426,6 +440,7 @@ module axis_video_mixer
   axis_video_mixer_core #(
       .P_NUM_LAYERS   (P_NUM_LAYERS),
       .P_FIFO_DEPTH   (P_FIFO_DEPTH),
+      .P_RAM_STYLE    (P_RAM_STYLE),
       .P_OUT_HAS_ALPHA(P_OUT_HAS_ALPHA),
       .P_PPC          (P_PPC),
       .P_CH_W         (P_CH_W)

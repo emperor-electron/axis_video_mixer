@@ -130,14 +130,26 @@ would mean N asynchronous FIFOs whether or not anyone needed them.
 |---|---|---|
 | `P_NUM_LAYERS` | 4 | Layer streams wired to the datapath, 1 to 8. All eight port sets exist regardless; the rest hold `TREADY` low |
 | `P_FIFO_DEPTH` | 2048 | Per layer, in beats. Power of two |
+| `P_RAM_STYLE` | `"block"` | Layer buffer primitive: `"block"` for RAMB18/36, `"ultra"` for URAM288 on UltraScale+ |
 | `P_OUT_HAS_ALPHA` | 1 | 1 = RGBA out, 0 = RGB out |
 | `P_PPC` | 1 | Pixels per beat on every stream: 1, 2, 4 or 8 |
 | `P_CH_W` | 8 | Colour component width: 8, 10, 12 or 16 |
 | `P_AXIL_ADDR_W` | 12 | |
 
-All five are reported back through `CAPS`, driven from the parameters rather
-than baked into the register map — so one map describes every build and
-software never has to assume any of them.
+`P_NUM_LAYERS`, `P_FIFO_DEPTH`, `P_OUT_HAS_ALPHA`, `P_PPC` and `P_CH_W` are
+reported back through `CAPS`, driven from the parameters rather than baked into
+the register map — so one map describes every build and software never has to
+assume any of them. `P_RAM_STYLE` is not: it changes which hard macro the
+buffers land in and nothing software can observe.
+
+**Choosing `P_RAM_STYLE`.** A resource trade, not a functional one — the two
+settings are bit-identical, which is checked rather than assumed (§14.6 and the
+`ultra` task in `formal/fv_fifo.sby`). At 2048 × 32 per layer, synthesis gives
+**2 RAMB36E2** for `"block"` against **1 URAM288** for `"ultra"`, with the same
+25 flops either way. URAM288 is 4096 × 72, so that buffer uses about a fifth of
+one; it pays when the buffers are deep or wide enough to use the shape — 4K
+lines, `P_PPC = 8`, deep colour — or simply when block RAM is wanted elsewhere.
+`"ultra"` requires UltraScale+ or later.
 
 **Sizing `P_FIFO_DEPTH`.** It must be at least the widest layer the build will
 ever show. A window at `x = 0` gets no head start within the line, so a full
@@ -337,7 +349,7 @@ make -C formal quick      # every bmc task, about 30 s, for use while editing
 ```
 
 SymbiYosys with yosys-slang and boolector, all three from the OSS CAD Suite.
-Five proofs over 49 tasks — 154 assertions, 49 cover statements, 15 assumptions
+Five proofs over 50 tasks — 156 assertions, 49 cover statements, 15 assumptions
 — in [`formal/`](formal), documented in
 [`doc/formal.md`](doc/formal.md) — which is where to look for what is bounded
 rather than proved, where each assumption is discharged, and what is not

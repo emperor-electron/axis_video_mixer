@@ -344,7 +344,59 @@ the mixer consumes `w × h` — so the FIFO absorbs *intra-frame* burstiness, no
 rate mismatch. If the rates genuinely differ you get `STARVE`, and no depth
 fixes that.
 
-### 5.7 FWFT, with a prefetch register
+### 5.7 Block RAM or UltraRAM, by parameter
+
+`P_RAM_STYLE` picks the primitive the layer buffer lands in: `"block"` for
+RAMB18/RAMB36, `"ultra"` for URAM288 on UltraScale+. It changes the synthesis
+attribute and nothing else, and the two settings are bit-identical — verified,
+not assumed.
+
+**Why the choice is available at all** is the single clock domain. URAM288 has
+no second clock; it is a synchronous macro with both ports on one clock. A FIFO
+that crossed domains could not use it without a rebuild, and this one has never
+crossed domains — the whole mixer is one clock (R9), so the layer buffer was
+already in the shape URAM needs.
+
+UltraRAM's other restrictions, and where each is already met:
+
+| URAM requires | Met by |
+|---|---|
+| A synchronous read, no distributed/async path | The read is registered into `mem_dout`; nothing reads the array combinationally |
+| No reset of the array | `flush` resets the **pointers** only. That was always true — it is why flush costs one cycle rather than `P_DEPTH` — and it is what makes the array resettable-free |
+| No read-first at a colliding address | Structural: a read needs `rd_ptr != wr_ptr` and a write needs `!full`, which between them exclude an equal address. Proved, not argued — `a_no_addr_collision` in `fv_fifo` |
+
+That last one is the only requirement that is a property rather than a
+coding-style choice, which is why it is a proof rather than a comment. URAM has
+no read-before-write mode, so a same-address collision would have to be
+resolved in fabric, and the choice of primitive would stop being free.
+
+**The attribute needs a string literal**, and there is no spelling of
+`ram_style` that reads a parameter — so selecting the primitive means selecting
+the *declaration*, and the array sits in one of two generate branches whose
+bodies are otherwise identical. The duplication is deliberate and the comment
+on it says so: if the two bodies ever diverge, the parameter stops being a
+resource knob and starts being a second design.
+
+**What it costs**, at 2048 × 32 per layer, from yosys with `-family xcup`:
+
+| | Memory | Flops |
+|---|---|---|
+| `"block"` | 2 × RAMB36E2 | 25 |
+| `"ultra"` | 1 × URAM288 | 25 |
+
+The equal flop count is the thing worth noting: `mem_dout` carries a
+synchronous clear, and a clear the macro cannot absorb would have to be built
+from `P_WIDTH` fabric flops beside it — 512 of them at `P_PPC = 8` and
+`P_CH_W = 16`. It is absorbed into the output register in both cases.
+
+A URAM288 is 4096 × 72, so a 2048 × 32 buffer uses about a fifth of one against
+two nearly-full RAMB36s. `"ultra"` is not a free win at that size; it pays when
+the buffers are deep or wide enough to use the shape, or when block RAM is
+wanted for something else. Vivado is the tool that decides, and it is not
+available here — the primitive choice is verified in principle and unconfirmed
+on the real flow. The *behaviour* under both settings is verified properly.
+
+### 5.8 FWFT, with a prefetch register
 
 The consumer decides whether to pop based on whether data is present; it cannot
 afford a read-latency cycle inside the blend pipeline and cannot speculatively
@@ -362,7 +414,7 @@ empty or is being emptied this cycle.
 Pointers carry one bit more than the address so full and empty are
 distinguishable without sacrificing an entry.
 
-### 5.8 `SRC_STALL`, not `OVERFLOW`
+### 5.9 `SRC_STALL`, not `OVERFLOW`
 
 The first draft had an `ERR.OVERFLOW` for a source writing to a full FIFO. It
 cannot happen: `TREADY = !full`, so a compliant master never pushes while full,
@@ -376,7 +428,7 @@ first stalled cycle, and why `STALL_LIMIT = 0` disables it.
 
 ---
 
-### 5.9 Suggested build order
+### 5.10 Suggested build order
 
 Each step is independently testable, so a failure is localised rather than a
 whole-design mystery. This is roughly the order the block was built in, and the
@@ -406,7 +458,7 @@ gated on `pipe_en`, and finding out at step 6 is much cheaper than at step 10.
 
 ---
 
-### 5.10 Cheat sheet
+### 5.11 Cheat sheet
 
 Everything load-bearing in one place.
 
